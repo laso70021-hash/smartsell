@@ -1,0 +1,11 @@
+node_modules/
+dist/
+data/
+*.db*
+.env*
+!.env.example
+.agents/
+test-results/
+*.tsbuildinfo
+.vercel/
+supabase/.temp/
