@@ -37,6 +37,8 @@ export type ReceiptConfig = {
   editor_data?: OutputData;
 };
 
+const MAX_DOCUMENT_LOGO_SIZE_BYTES = 512 * 1024;
+
 type Preset = {
   id: string;
   name: string;
@@ -362,6 +364,20 @@ type Template = Row & {
   is_default: boolean;
   is_published: boolean;
 };
+
+export function officialReceiptSettings(
+  templates: Array<Pick<Template, "config" | "is_default">>,
+): ReceiptConfig {
+  const defaultTemplate = templates.find((template) => template.is_default);
+  const logo =
+    defaultTemplate?.config.logo_data_url ||
+    templates.find((template) => template.config.logo_data_url)?.config
+      .logo_data_url;
+  return {
+    ...(defaultTemplate?.config || DEFAULT_RECEIPT_CONFIG),
+    ...(logo ? { logo_data_url: logo } : {}),
+  };
+}
 
 export function ReceiptDocument({
   business,
@@ -763,6 +779,10 @@ export function DocumentTemplates() {
       setLogoError("Choose a PNG, JPEG, or WebP logo.");
       return;
     }
+    if (file.size > MAX_DOCUMENT_LOGO_SIZE_BYTES) {
+      setLogoError("Choose a logo smaller than 512 KiB.");
+      return;
+    }
     const reader = new FileReader();
     reader.onerror = () => setLogoError("The selected logo could not be read.");
     reader.onload = () => {
@@ -894,7 +914,7 @@ export function DocumentTemplates() {
             <label className="field"><span>Paper size</span><select value={settings.paper_size} onChange={(event) => changeSettings({ ...settings, paper_size: event.target.value as ReceiptConfig["paper_size"] })}><option value="58mm">58 mm thermal</option><option value="80mm">80 mm thermal</option><option value="A4">A4</option></select></label>
             <label className="field"><span>Header arrangement</span><select value={settings.header_layout} onChange={(event) => changeSettings({ ...settings, header_layout: event.target.value as ReceiptConfig["header_layout"] })}><option value="centered">Centered</option><option value="split">Logo left</option></select></label>
             <label className="field"><span>Footer message</span><textarea value={settings.footer_message} maxLength={300} onChange={(event) => changeSettings({ ...settings, footer_message: event.target.value })} /></label>
-            <label className="field"><span>Business logo (PNG, JPEG, or WebP)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadLogo(event.target.files?.[0])} /></label>
+            <label className="field"><span>Business logo (PNG, JPEG, or WebP; up to 512 KiB)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadLogo(event.target.files?.[0])} /><small>After saving this template to your business, its logo is used on official sales receipts even when another template controls the receipt layout.</small></label>
             {settings.logo_data_url && <Button variant="ghost" onClick={() => changeSettings({ ...settings, logo_data_url: undefined })}><RotateCcw size={14} /> Restore supplied logo</Button>}
             {logoError && <p className="error" role="alert">{logoError}</p>}
             <div className="document-editor-actions">

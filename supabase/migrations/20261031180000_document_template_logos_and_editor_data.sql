@@ -1,21 +1,31 @@
 -- Allow larger inline document logos and persist the current block-editor configuration.
 do $$
 declare
-  size_constraint text;
+  size_constraint record;
 begin
-  select conname
-    into size_constraint
-    from pg_constraint
-   where conrelid = 'public.smartsell_document_templates'::regclass
-     and contype = 'c'
-     and pg_get_constraintdef(oid) like '%octet_length(config::text)%';
-
-  if size_constraint is not null then
+  for size_constraint in
+    select conname
+      from pg_constraint
+     where conrelid = 'public.smartsell_document_templates'::regclass
+       and contype = 'c'
+       and (
+         conname = 'smartsell_document_templates_config_check'
+         or (
+           position('octet_length' in pg_get_constraintdef(oid)) > 0
+           and position('config' in pg_get_constraintdef(oid)) > 0
+           and position('::text' in pg_get_constraintdef(oid)) > 0
+         )
+       )
+  loop
     execute format(
       'alter table public.smartsell_document_templates drop constraint %I',
-      size_constraint
+      size_constraint.conname
     );
-  end if;
+  end loop;
+
+  alter table public.smartsell_document_templates
+    add constraint smartsell_document_templates_config_size_check
+    check (octet_length(config::text) <= 1000000);
 end
 $$;
 

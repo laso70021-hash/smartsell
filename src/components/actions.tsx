@@ -27,6 +27,7 @@ import { Button } from "./ui/button";
 import {
   DEFAULT_RECEIPT_CONFIG,
   ReceiptDocument,
+  officialReceiptSettings,
   type ReceiptConfig,
 } from "./documents";
 function parseCSV(source: string) {
@@ -465,12 +466,14 @@ export function ActionDialog({
   useEffect(() => {
     if (type !== "receipt" && type !== "invoice") return;
     let active = true;
+    setReceiptSettings(DEFAULT_RECEIPT_CONFIG);
+    setReceiptTemplateError("");
     api<{ templates: Array<{ config: ReceiptConfig; is_default: boolean }> }>(
       `/document-templates?document_type=${type === "invoice" ? "sales_invoice" : "sales_receipt"}`,
     )
       .then(({ templates }) => {
-        const template = templates?.find((item) => item.is_default);
-        if (active && template) setReceiptSettings(template.config);
+        if (active)
+          setReceiptSettings(officialReceiptSettings(templates || []));
       })
       .catch((reason) => {
         if (active) setReceiptTemplateError((reason as Error).message);
