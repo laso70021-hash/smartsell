@@ -1,10 +1,30 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Copy, FileText, Printer, RotateCcw, Save, Undo2, Redo2 } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  Copy,
+  Download,
+  FileText,
+  Printer,
+  RotateCcw,
+  Save,
+  Undo2,
+  Redo2,
+} from "lucide-react";
+import type EditorJS from "@editorjs/editorjs";
+import type { OutputData } from "@editorjs/editorjs";
+import { openDB, type DBSchema } from "idb";
 import { Link } from "react-router-dom";
 import { useWorkspace } from "../App";
 import { api, multiplyMinor, type Row } from "../lib/api";
 import { Badge, PageTitle } from "./shared";
 import { Button } from "./ui/button";
+import { DocumentBlockEditor, EMPTY_DOCUMENT_DATA } from "./document-editor";
 
 export type ReceiptConfig = {
   primary_color: string;
@@ -14,6 +34,7 @@ export type ReceiptConfig = {
   header_layout: "centered" | "split";
   footer_message: string;
   logo_data_url?: string;
+  editor_data?: OutputData;
 };
 
 type Preset = {
@@ -106,6 +127,234 @@ const invoicePresets: Preset[] = presets.map((preset) => ({
   config: { ...preset.config, paper_size: "A4" as const },
 }));
 
+type DocumentVariable = { key: string; label: string };
+
+const sharedDocumentVariables: DocumentVariable[] = [
+  { key: "business.name", label: "Business name" },
+  { key: "branch.name", label: "Branch name" },
+  { key: "document.reference", label: "Document reference" },
+  { key: "document.date", label: "Document date" },
+  { key: "customer.name", label: "Customer name" },
+  { key: "items.count", label: "Number of lines" },
+  { key: "items.list", label: "Item names and quantities" },
+  { key: "totals.subtotal", label: "Subtotal" },
+  { key: "totals.discount", label: "Discount" },
+  { key: "totals.tax", label: "Tax" },
+  { key: "totals.total", label: "Total" },
+  { key: "totals.paid", label: "Amount paid" },
+  { key: "totals.balance", label: "Outstanding balance" },
+  { key: "payment.status", label: "Payment status" },
+];
+
+const receiptDocumentVariables: DocumentVariable[] = [
+  { key: "receipt.cashier", label: "Cashier" },
+  { key: "receipt.payment_method", label: "Payment method" },
+  { key: "receipt.cash_change", label: "Cash change" },
+];
+
+const invoiceDocumentVariables: DocumentVariable[] = [
+  { key: "invoice.number", label: "Invoice number" },
+  { key: "invoice.date", label: "Invoice date" },
+  { key: "invoice.bill_to", label: "Bill to" },
+  { key: "invoice.status", label: "Invoice status" },
+  { key: "invoice.balance", label: "Invoice balance" },
+];
+
+interface DocumentDraftDatabase extends DBSchema {
+  drafts: { key: string; value: DeviceTemplateDraft };
+}
+
+type DeviceTemplateDraft = {
+  name: string;
+  config: ReceiptConfig;
+  selectedId: string;
+  selectedSavedId: string;
+};
+
+const deviceDraftDatabase = openDB<DocumentDraftDatabase>(
+  "smartsell-document-template-drafts",
+  1,
+  {
+    upgrade(database) {
+      database.createObjectStore("drafts");
+    },
+  },
+);
+
+async function readDeviceDraft(key: string) {
+  return (await deviceDraftDatabase).get("drafts", key);
+}
+
+async function writeDeviceDraft(key: string, draft: DeviceTemplateDraft) {
+  await (await deviceDraftDatabase).put("drafts", draft, key);
+}
+
+function plainEditorText(
+  value: unknown,
+  variables: Record<string, string> = {},
+) {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/<[^>]*>/g, "")
+    .replace(/\{\{\s*([a-z0-9_.]+)\s*\}\}/gi, (token, key: string) =>
+      variables[key.toLowerCase()] ?? token,
+    );
+}
+
+function renderListItems(
+  items: unknown,
+  variables: Record<string, string>,
+): ReactNode {
+  if (!Array.isArray(items)) return null;
+  return (
+    <ul>
+      {items.map((item, index) => {
+        if (typeof item === "string")
+          return <li key={index}>{plainEditorText(item, variables)}</li>;
+        if (typeof item !== "object" || item === null) return null;
+        const row = item as Record<string, unknown>;
+        return (
+          <li key={index}>
+            {plainEditorText(row.content, variables)}
+            {renderListItems(row.items, variables)}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function renderDocumentBlocks(
+  document: OutputData | undefined,
+  variables: Record<string, string>,
+) {
+  return (document?.blocks || []).map((block, index) => {
+    const data = block.data as Record<string, unknown>;
+    if (block.type === "header") {
+      const rawLevel = Number(data.level);
+      const level = Number.isInteger(rawLevel)
+        ? Math.min(4, Math.max(2, rawLevel))
+        : 3;
+      const text = plainEditorText(data.text, variables);
+      return text
+        ? level === 2
+          ? <h2 key={block.id || index}>{text}</h2>
+          : level === 4
+            ? <h4 key={block.id || index}>{text}</h4>
+            : <h3 key={block.id || index}>{text}</h3>
+        : null;
+    }
+    if (block.type === "paragraph") {
+      const text = plainEditorText(data.text, variables);
+      return text ? <p key={block.id || index}>{text}</p> : null;
+    }
+    if (block.type === "list") {
+      return (
+        <div key={block.id || index} className="document-content-list">
+          {renderListItems(data.items, variables)}
+        </div>
+      );
+    }
+    if (block.type === "table" && Array.isArray(data.content)) {
+      return (
+        <table className="document-content-table" key={block.id || index}>
+          <tbody>
+            {data.content.map((row, rowIndex) =>
+              Array.isArray(row) ? (
+                <tr key={rowIndex}>
+                  {row.map((cell, cellIndex) => {
+                    return (
+                      data.withHeadings && rowIndex === 0 ? (
+                        <th key={cellIndex}>{plainEditorText(cell, variables)}</th>
+                      ) : (
+                        <td key={cellIndex}>{plainEditorText(cell, variables)}</td>
+                      )
+                    );
+                  })}
+                </tr>
+              ) : null,
+            )}
+          </tbody>
+        </table>
+      );
+    }
+    if (block.type === "quote") {
+      const text = plainEditorText(data.text, variables);
+      return text ? (
+        <blockquote key={block.id || index}>
+          <p>{text}</p>
+          {plainEditorText(data.caption, variables) && (
+            <cite>{plainEditorText(data.caption, variables)}</cite>
+          )}
+        </blockquote>
+      ) : null;
+    }
+    if (block.type === "delimiter")
+      return <hr key={block.id || index} className="document-content-divider" />;
+    return null;
+  });
+}
+
+function escapeHtml(value: unknown) {
+  return plainEditorText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function exportDocumentBlocks(document?: OutputData) {
+  return (document?.blocks || [])
+    .map((block) => {
+      const data = block.data as Record<string, unknown>;
+      if (block.type === "header") {
+        const rawLevel = Number(data.level);
+        const level = Number.isInteger(rawLevel)
+          ? Math.min(4, Math.max(2, rawLevel))
+          : 3;
+        const text = escapeHtml(data.text);
+        return text ? `<h${level}>${text}</h${level}>` : "";
+      }
+      if (block.type === "paragraph") {
+        const text = escapeHtml(data.text);
+        return text ? `<p>${text}</p>` : "";
+      }
+      if (block.type === "list" && Array.isArray(data.items)) {
+        const tag = data.style === "ordered" ? "ol" : "ul";
+        const items = data.items
+          .map((item) => {
+            const text =
+              typeof item === "object" && item !== null
+                ? escapeHtml((item as Record<string, unknown>).content)
+                : escapeHtml(item);
+            return text ? `<li>${text}</li>` : "";
+          })
+          .join("");
+        return items ? `<${tag}>${items}</${tag}>` : "";
+      }
+      if (block.type === "table" && Array.isArray(data.content)) {
+        const rows = data.content
+          .map((row, rowIndex) => {
+            if (!Array.isArray(row)) return "";
+            const cellTag = data.withHeadings && rowIndex === 0 ? "th" : "td";
+            return `<tr>${row.map((cell) => `<${cellTag}>${escapeHtml(cell)}</${cellTag}>`).join("")}</tr>`;
+          })
+          .join("");
+        return rows ? `<table><tbody>${rows}</tbody></table>` : "";
+      }
+      if (block.type === "quote") {
+        const text = escapeHtml(data.text);
+        const caption = escapeHtml(data.caption);
+        return text
+          ? `<blockquote><p>${text}</p>${caption ? `<cite>${caption}</cite>` : ""}</blockquote>`
+          : "";
+      }
+      return block.type === "delimiter" ? "<hr>" : "";
+    })
+    .join("\n");
+}
+
 type Template = Row & {
   document_type: "sales_receipt" | "sales_invoice";
   name: string;
@@ -159,6 +408,38 @@ export function ReceiptDocument({
     "--document-accent": settings.accent_color,
     fontFamily: settings.font_family,
   } as CSSProperties;
+  const documentDate = sale?.created_at
+    ? new Date(sale.created_at).toLocaleString()
+    : "Preview date";
+  const documentReference = sale?.reference || "PREVIEW";
+  const customerName = sale?.customer || "Walk-in customer";
+  const balance = sale?.status === "refunded"
+    ? 0
+    : (sale?.total || subtotal) - (sale?.paid || 0);
+  const variables: Record<string, string> = {
+    "business.name": String(business.name || "Business name"),
+    "branch.name": String(branch?.name || ""),
+    "document.reference": documentReference,
+    "document.date": documentDate,
+    "customer.name": customerName,
+    "items.count": String(saleItems.length),
+    "items.list": saleItems.map((item) => `${item.name} x ${item.quantity}`).join(", "),
+    "totals.subtotal": money(subtotal),
+    "totals.discount": money(sale?.discount || 0),
+    "totals.tax": money(sale?.tax || 0),
+    "totals.total": money(sale?.total || subtotal),
+    "totals.paid": money(sale?.paid || 0),
+    "totals.balance": money(balance),
+    "payment.status": paymentStatus,
+    "receipt.cashier": String(sale?.actor || "Sales team"),
+    "receipt.payment_method": String(sale?.method || "cash"),
+    "receipt.cash_change": money(cashChange),
+    "invoice.number": documentReference,
+    "invoice.date": documentDate,
+    "invoice.bill_to": customerName,
+    "invoice.status": paymentStatus,
+    "invoice.balance": money(balance),
+  };
   return (
     <article
       className="document-receipt"
@@ -170,6 +451,7 @@ export function ReceiptDocument({
       )}
       <header className={"document-receipt-header " + settings.header_layout}>
         <img
+          className={settings.logo_data_url ? "custom-document-logo" : undefined}
           src={settings.logo_data_url || "/brand/swahivo-pos-logo.png"}
           alt={`${business.name} logo`}
         />
@@ -192,6 +474,9 @@ export function ReceiptDocument({
         <div><span>{documentType === "sales_invoice" ? "Bill to" : "Customer"}</span><strong>{sale?.customer || "Walk-in customer"}</strong></div>
         {documentType === "sales_receipt" && <div><span>Cashier</span><strong>{sale?.actor || "Sales team"}</strong></div>}
         <div><span>{documentType === "sales_invoice" ? "Payment status" : "Payment"}</span><strong>{sale ? (documentType === "sales_invoice" ? paymentStatus : `${sale.method} · ${paymentStatus}`) : "Preview only"}</strong></div>
+      </div>
+      <div className="document-custom-content">
+        {renderDocumentBlocks(settings.editor_data, variables)}
       </div>
       <table className="document-items">
         <thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead>
@@ -233,18 +518,27 @@ export function DocumentTemplates() {
   const [selectedSavedId, setSelectedSavedId] = useState("");
   const [name, setName] = useState(presets[0].name);
   const [settings, setSettings] = useState<ReceiptConfig>(presets[0].config);
+  const [editorData, setEditorData] = useState<OutputData>(EMPTY_DOCUMENT_DATA);
+  const [editorReset, setEditorReset] = useState(0);
+  const editorRef = useRef<EditorJS | null>(null);
+  const [selectedVariable, setSelectedVariable] = useState("business.name");
   const [undoStack, setUndoStack] = useState<ReceiptConfig[]>([]);
   const [redoStack, setRedoStack] = useState<ReceiptConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [logoError, setLogoError] = useState("");
+  const [draftStatus, setDraftStatus] = useState("Draft saves on this device");
+  const draftKey = `${data.business.id}:${documentType}`;
   const activeBranch = data.branches.find((item) => item.id === branch);
   const sale = data.sales[0];
   const saleItems = sale ? data.items.filter((item) => item.sale_id === sale.id) : [];
   const currentPresets =
     documentType === "sales_invoice" ? invoicePresets : presets;
   const selectedPreset = currentPresets.find((item) => item.id === selectedId);
+  const availableVariables = documentType === "sales_invoice"
+    ? [...sharedDocumentVariables, ...invoiceDocumentVariables]
+    : [...sharedDocumentVariables, ...receiptDocumentVariables];
 
   useEffect(() => {
     let active = true;
@@ -255,35 +549,71 @@ export function DocumentTemplates() {
     setSelectedSavedId("");
     setName(currentPresets[0].name);
     setSettings(currentPresets[0].config);
+    setEditorData(currentPresets[0].config.editor_data || EMPTY_DOCUMENT_DATA);
+    setEditorReset((revision) => revision + 1);
     setUndoStack([]);
     setRedoStack([]);
-    api<{ templates: Template[] }>(
-      `/document-templates?document_type=${documentType}`,
-    )
-      .then((result) => {
+    Promise.all([
+      api<{ templates: Template[] }>(`/document-templates?document_type=${documentType}`)
+        .catch((reason) => {
+          if (active) setError((reason as Error).message);
+          return { templates: [] as Template[] };
+        }),
+      readDeviceDraft(draftKey).catch(() => undefined),
+    ])
+      .then(([result, deviceDraft]) => {
         if (!active) return;
         const saved = result.templates || [];
         setTemplates(saved);
         const defaultTemplate = saved.find((template) => template.is_default);
-        if (defaultTemplate) {
+        if (deviceDraft) {
+          setSelectedId(deviceDraft.selectedId);
+          setSelectedSavedId(deviceDraft.selectedSavedId);
+          setName(deviceDraft.name);
+          setSettings(deviceDraft.config);
+          setEditorData(deviceDraft.config.editor_data || EMPTY_DOCUMENT_DATA);
+          setEditorReset((revision) => revision + 1);
+          setDraftStatus("Restored this device's latest draft");
+        } else if (defaultTemplate) {
           setSelectedId("");
           setSelectedSavedId(defaultTemplate.id);
           setName(defaultTemplate.name);
           setSettings(defaultTemplate.config);
+          setEditorData(defaultTemplate.config.editor_data || EMPTY_DOCUMENT_DATA);
+          setEditorReset((revision) => revision + 1);
         } else {
           const firstPreset = currentPresets[0];
           setSelectedId(firstPreset.id);
           setSelectedSavedId("");
           setName(firstPreset.name);
           setSettings(firstPreset.config);
+          setEditorData(firstPreset.config.editor_data || EMPTY_DOCUMENT_DATA);
+          setEditorReset((revision) => revision + 1);
         }
-      })
-      .catch((reason) => {
-        if (active) setError((reason as Error).message);
       })
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [currentPresets, documentType]);
+  }, [currentPresets, documentType, draftKey]);
+
+  useEffect(() => {
+    if (loading) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      const draft: DeviceTemplateDraft = {
+        name,
+        config: { ...settings, editor_data: editorData },
+        selectedId,
+        selectedSavedId,
+      };
+      void writeDeviceDraft(draftKey, draft)
+        .then(() => active && setDraftStatus("Draft saved on this device"))
+        .catch(() => active && setDraftStatus("Device draft could not be saved"));
+    }, 350);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [draftKey, editorData, loading, name, selectedId, selectedSavedId, settings]);
 
   const allTemplates = useMemo(
     () => [
@@ -303,8 +633,22 @@ export function DocumentTemplates() {
     setSelectedSavedId("");
     setName(preset.name);
     setSettings(preset.config);
+    setEditorData(preset.config.editor_data || EMPTY_DOCUMENT_DATA);
+    setEditorReset((revision) => revision + 1);
     setUndoStack([]);
     setRedoStack([]);
+  }
+
+  function chooseSavedTemplate(
+    template: Pick<Template, "id" | "name" | "config">,
+    duplicate = false,
+  ) {
+    setSelectedId("");
+    setSelectedSavedId(duplicate ? "" : template.id);
+    setName(duplicate ? `${template.name} copy` : template.name);
+    setSettings(template.config);
+    setEditorData(template.config.editor_data || EMPTY_DOCUMENT_DATA);
+    setEditorReset((revision) => revision + 1);
   }
 
   function changeSettings(next: ReceiptConfig) {
@@ -313,16 +657,21 @@ export function DocumentTemplates() {
     setSettings(next);
   }
 
-  async function saveTemplate() {
+  async function saveTemplateToBusiness() {
     setSaving(true);
     setError("");
     try {
+      const currentEditorData = await editorRef.current?.save() || editorData;
+      if (new TextEncoder().encode(JSON.stringify(currentEditorData)).byteLength > 100_000)
+        throw new Error("Document layout content must be under 100 KB.");
+      setEditorData(currentEditorData);
+      const savedConfig = { ...settings, editor_data: currentEditorData };
       const saved = await api<Template>("/document-templates", {
         action: "save",
         id: selectedSavedId || undefined,
         document_type: documentType,
         name: name.trim(),
-        config: settings,
+        config: savedConfig,
         is_published: true,
       });
       setTemplates((current) => [
@@ -331,13 +680,57 @@ export function DocumentTemplates() {
       ]);
       setSelectedSavedId(saved.id);
       setSelectedId("");
+      setSettings(saved.config);
       notify(
-        `${documentType === "sales_invoice" ? "Invoice" : "Receipt"} template saved.`,
+        `${documentType === "sales_invoice" ? "Invoice" : "Receipt"} template saved to this business.`,
       );
     } catch (reason) {
       setError((reason as Error).message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function downloadTemplate() {
+    setError("");
+    try {
+      const currentEditorData = await editorRef.current?.save() || editorData;
+      if (new TextEncoder().encode(JSON.stringify(currentEditorData)).byteLength > 100_000)
+        throw new Error("Document layout content must be under 100 KB.");
+      const payload = {
+        format: "smartsell-document-template",
+        version: 1,
+        document_type: documentType,
+        name: name.trim() || `Sales ${documentType === "sales_invoice" ? "invoice" : "receipt"}`,
+        config: { ...settings, editor_data: currentEditorData },
+      };
+      try {
+        await writeDeviceDraft(draftKey, {
+          name: payload.name,
+          config: payload.config,
+          selectedId,
+          selectedSavedId,
+        });
+        setDraftStatus("Draft saved on this device");
+      } catch {
+        setDraftStatus("Download is ready; device autosave is unavailable");
+      }
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${payload.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "smartsell-template"}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      setEditorData(currentEditorData);
+      notify("Template downloaded as a reusable JSON file.");
+    } catch (reason) {
+      setError((reason as Error).message);
     }
   }
 
@@ -368,10 +761,6 @@ export function DocumentTemplates() {
     if (!file) return;
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
       setLogoError("Choose a PNG, JPEG, or WebP logo.");
-      return;
-    }
-    if (file.size > 128 * 1024) {
-      setLogoError("Logo files must be 128 KB or smaller.");
       return;
     }
     const reader = new FileReader();
@@ -450,29 +839,17 @@ export function DocumentTemplates() {
                 <small>Sales {documentType === "sales_invoice" ? "invoice" : "receipt"} · {template.config.paper_size}</small>
                 <div className="document-template-actions">
                   <Button size="sm" variant="ghost" onClick={() => {
-                    if (template.saved) {
-                      setSelectedId("");
-                      setSelectedSavedId(template.id);
-                      setName(template.name);
-                      setSettings(template.config);
-                    } else choosePreset(template as Preset);
+                    if (template.saved) chooseSavedTemplate(template as Pick<Template, "id" | "name" | "config">);
+                    else choosePreset(template as Preset);
                   }}>Preview</Button>
                   <Button size="sm" variant="secondary" onClick={() => {
-                    if (template.saved) {
-                      setSelectedId("");
-                      setSelectedSavedId(template.id);
-                      setName(template.name);
-                      setSettings(template.config);
-                    } else choosePreset(template as Preset);
+                    if (template.saved) chooseSavedTemplate(template as Pick<Template, "id" | "name" | "config">);
+                    else choosePreset(template as Preset);
                     document.getElementById("document-editor")?.scrollIntoView({ behavior: "smooth" });
                   }}>Customize</Button>
                   <Button size="sm" variant="ghost" onClick={() => {
-                    if (template.saved) {
-                      setSelectedId("");
-                      setSelectedSavedId("");
-                      setSettings(template.config);
-                      setName(`${template.name} copy`);
-                    } else {
+                    if (template.saved) chooseSavedTemplate(template as Pick<Template, "id" | "name" | "config">, true);
+                    else {
                       choosePreset(template as Preset);
                       setName(`${template.name} copy`);
                     }
@@ -517,13 +894,15 @@ export function DocumentTemplates() {
             <label className="field"><span>Paper size</span><select value={settings.paper_size} onChange={(event) => changeSettings({ ...settings, paper_size: event.target.value as ReceiptConfig["paper_size"] })}><option value="58mm">58 mm thermal</option><option value="80mm">80 mm thermal</option><option value="A4">A4</option></select></label>
             <label className="field"><span>Header arrangement</span><select value={settings.header_layout} onChange={(event) => changeSettings({ ...settings, header_layout: event.target.value as ReceiptConfig["header_layout"] })}><option value="centered">Centered</option><option value="split">Logo left</option></select></label>
             <label className="field"><span>Footer message</span><textarea value={settings.footer_message} maxLength={300} onChange={(event) => changeSettings({ ...settings, footer_message: event.target.value })} /></label>
-            <label className="field"><span>Business logo (PNG, JPEG, WebP · 128 KB max)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadLogo(event.target.files?.[0])} /></label>
+            <label className="field"><span>Business logo (PNG, JPEG, or WebP)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadLogo(event.target.files?.[0])} /></label>
             {settings.logo_data_url && <Button variant="ghost" onClick={() => changeSettings({ ...settings, logo_data_url: undefined })}><RotateCcw size={14} /> Restore supplied logo</Button>}
             {logoError && <p className="error" role="alert">{logoError}</p>}
             <div className="document-editor-actions">
-              <Button onClick={() => void saveTemplate()} disabled={saving || !name.trim()}><Save size={16} />{saving ? "Saving…" : "Save template"}</Button>
+              <Button onClick={() => void downloadTemplate()} disabled={!name.trim()}><Download size={16} />Save template</Button>
+              <Button variant="secondary" onClick={() => void saveTemplateToBusiness()} disabled={saving || !name.trim()}><Save size={16} />{saving ? "Saving…" : "Save to business"}</Button>
               <Button variant="secondary" onClick={() => window.print()}><Printer size={16} />Print / Save PDF</Button>
             </div>
+            <small className="muted" role="status">{draftStatus}</small>
             {loading && <small className="muted">Loading business templates…</small>}
           </div>
           <div className="document-canvas">
@@ -535,13 +914,46 @@ export function DocumentTemplates() {
                 sale={sale}
                 items={saleItems}
                 money={money}
-                settings={settings}
+                settings={{ ...settings, editor_data: editorData }}
                 previewOnly={!sale}
                 documentType={documentType}
               />
             </div>
             {sale && <p className="document-preview-caption">Previewing recorded sale {sale.reference}; printing preserves its recorded amounts and status.</p>}
           </div>
+        </div>
+        <div className="document-content-editor">
+          <div className="document-variable-controls">
+            <label className="field">
+              <span>{documentType === "sales_invoice" ? "Invoice variable" : "Receipt variable"}</span>
+              <select
+                aria-label="Dynamic document variable"
+                value={selectedVariable}
+                onChange={(event) => setSelectedVariable(event.target.value)}
+              >
+                {availableVariables.map((variable) => (
+                  <option key={variable.key} value={variable.key}>
+                    {variable.label} ({"{{"}{variable.key}{"}}"})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              variant="secondary"
+              onClick={() => editorRef.current?.blocks.insert("paragraph", {
+                text: `{{${selectedVariable}}}`,
+              })}
+            >
+              Insert variable
+            </Button>
+          </div>
+          <DocumentBlockEditor
+            key={editorReset}
+            initialData={editorData}
+            onChange={setEditorData}
+            onReady={(editor) => { editorRef.current = editor; }}
+            onError={setError}
+          />
         </div>
       </section>
       {!templates.length && !loading && !error && (

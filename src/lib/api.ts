@@ -16,6 +16,30 @@ export const businessCategories = [
   "Hardware",
   "Other",
 ];
+export const DEFAULT_CURRENCY = "TZS";
+const countryCodes =
+  "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS XK YE YT ZA ZM ZW";
+const countryNames = new Intl.DisplayNames(["en"], { type: "region" });
+export const countryOptions = countryCodes
+  .split(" ")
+  .map((code) => ({
+    value: code === "XK" ? "Kosovo" : countryNames.of(code) || code,
+    label: code === "XK" ? "Kosovo" : countryNames.of(code) || code,
+  }))
+  .sort((left, right) => left.label.localeCompare(right.label));
+const currencyNames = new Intl.DisplayNames(["en"], { type: "currency" });
+export const currencyOptions = Intl.supportedValuesOf("currency")
+  .map((code) => ({
+    value: code,
+    label: currencyNames.of(code) || code,
+  }))
+  .sort((left, right) =>
+    left.value === DEFAULT_CURRENCY
+      ? -1
+      : right.value === DEFAULT_CURRENCY
+        ? 1
+        : left.label.localeCompare(right.label),
+  );
 export type User = {
   id: string;
   name: string;
@@ -117,7 +141,7 @@ async function identity() {
       v: {
         name: metadata.name,
         business: metadata.business,
-        currency: metadata.currency || "KES",
+        currency: metadata.currency || "TZS",
         country: metadata.country || "Kenya",
         timezone:
           metadata.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -217,6 +241,72 @@ export async function api<T = any>(
         };
       }),
     } as T;
+  }
+  if (path === "/business" && method === "PUT")
+    return (await rpc<T>("smartsell_update_business", {
+      command: body,
+    })) as T;
+  if (path.startsWith("/restaurant")) {
+    const [pathname, query] = path.split("?", 2);
+    if (method === "GET" && pathname === "/restaurant") {
+      const branch = new URLSearchParams(query || "").get("branch");
+      return (await rpc<T>("smartsell_restaurant", {
+        command: { action: "list", branch_id: branch || undefined },
+      })) as T;
+    }
+
+    const commandBody = (body || {}) as Record<string, any>;
+    const orderMatch = pathname.match(
+      /^\/restaurant\/orders\/([0-9a-f-]{36})(?:\/(submit|close|cancel)|\/items\/([0-9a-f-]{36})\/status)$/i,
+    );
+    let action: string;
+    let entityId: string | undefined;
+    let itemId: string | undefined;
+    if (method === "POST" && pathname === "/restaurant/tables") {
+      action = "create_table";
+    } else if (method === "POST" && pathname === "/restaurant/stations") {
+      action = "create_station";
+    } else if (method === "POST" && pathname === "/restaurant/orders") {
+      action = "create_order";
+    } else if (method === "POST" && orderMatch) {
+      entityId = orderMatch[1];
+      itemId = orderMatch[3];
+      action = itemId
+        ? "set_item_status"
+        : `${orderMatch[2]}_order`;
+    } else {
+      throw new Error("Unsupported restaurant operation.");
+    }
+
+    return (await rpc<T>("smartsell_restaurant", {
+      command: {
+        action,
+        id: operation?.id || crypto.randomUUID(),
+        entity_id: operation?.entityId || entityId || crypto.randomUUID(),
+        created_at: operation?.createdAt || new Date().toISOString(),
+        ...(itemId ? { item_id: itemId } : {}),
+        ...(action === "set_item_status"
+          ? { status: commandBody.status }
+          : {}),
+        body: commandBody,
+      },
+    })) as T;
+  }
+  if (path.startsWith("/cashier-shifts")) {
+    const [pathname, query] = path.split("?", 2);
+    if (pathname !== "/cashier-shifts")
+      throw new Error("Unsupported cashier shift operation.");
+    const params = new URLSearchParams(query || "");
+    const command = method === "GET"
+      ? {
+          action: params.get("scope") === "active" ? "active" : "list",
+          branch_id: params.get("branch") || undefined,
+          from: params.get("from") || undefined,
+          to: params.get("to") || undefined,
+          cashier_id: params.get("cashier") || undefined,
+        }
+      : body;
+    return (await rpc<T>("smartsell_cashier_shifts", { command })) as T;
   }
   if (path.startsWith("/document-templates") && method === "GET") {
     const documentType = new URLSearchParams(path.split("?")[1] || "").get(

@@ -16,7 +16,14 @@ import {
 } from "lucide-react";
 import { Logo, Fields, Form } from "./shared";
 import { Button } from "./ui/button";
-import { api, businessCategories, type User } from "../lib/api";
+import {
+  api,
+  businessCategories,
+  currencyOptions,
+  countryOptions,
+  DEFAULT_CURRENCY,
+  type User,
+} from "../lib/api";
 const features = [
   {
     icon: ShoppingBag,
@@ -388,19 +395,17 @@ export function Auth({
                         label: "First branch",
                         value: "Main branch",
                       },
-                      { name: "country", label: "Country", value: "Kenya" },
+                      {
+                        name: "country",
+                        label: "Country",
+                        value: "Kenya",
+                        options: countryOptions,
+                      },
                       {
                         name: "currency",
                         label: "Business currency",
-                        value: "KES",
-                        options: [
-                          { value: "KES", label: "KES · Kenyan shilling" },
-                          { value: "UGX", label: "UGX · Ugandan shilling" },
-                          { value: "TZS", label: "TZS · Tanzanian shilling" },
-                          { value: "USD", label: "USD · US dollar" },
-                          { value: "EUR", label: "EUR · Euro" },
-                          { value: "GBP", label: "GBP · British pound" },
-                        ],
+                        value: DEFAULT_CURRENCY,
+                        options: currencyOptions,
                       },
                       {
                         name: "timezone",

@@ -26,11 +26,15 @@ import {
   FileText,
   QrCode,
   Utensils,
+  Play,
+  Square,
 } from "lucide-react";
 import { useWorkspace } from "../App";
 import {
   api,
   businessCategories,
+  currencyOptions,
+  countryOptions,
   dateKey,
   multiplyMinor,
   toMinor,
@@ -1137,8 +1141,16 @@ export function Records({ kind }: { kind: string }) {
                     key: "active",
                     label: "Status",
                     render: (r) => (
-                      <Badge tone={r.active ? "mint" : "red"}>
-                        {r.active ? "Active" : "Disabled"}
+                      <Badge
+                        tone={
+                          r.invited ? "amber" : r.active ? "mint" : "red"
+                        }
+                      >
+                        {r.invited
+                          ? "Invitation pending"
+                          : r.active
+                            ? "Active"
+                            : "Disabled"}
                       </Badge>
                     ),
                   },
@@ -1146,7 +1158,7 @@ export function Records({ kind }: { kind: string }) {
                     key: "actions",
                     label: "Manage",
                     render: (r) =>
-                      r.role !== "owner" && (
+                      r.role !== "owner" && !r.invited && (
                         <div className="row wrap">
                           <Button
                             variant="secondary"
@@ -1457,7 +1469,16 @@ export function Reports() {
         eyebrow="INSIGHT INTO ACTION"
         title="Sales & reports"
         description="The numbers behind your next decision. Always grounded in real records."
-        actions={<ExportButton kind="sales" from={from} to={to} />}
+        actions={
+          <>
+            <Button asChild variant="secondary">
+              <Link to="/app/reports/eod">
+                <FileText size={16} /> Cashier EOD Reports
+              </Link>
+            </Button>
+            <ExportButton kind="sales" from={from} to={to} />
+          </>
+        }
       />
       <div className="list-filter">
         <span className="row">
@@ -1557,8 +1578,141 @@ export function Reports() {
     </>
   );
 }
+
+type CashierShiftReport = Row & {
+  cashier: string;
+  report: {
+    sales: Row[];
+    items: Row[];
+  };
+};
+
+export function CashierEodReports() {
+  const { branch, data, money } = useWorkspace();
+  const [shifts, setShifts] = useState<CashierShiftReport[]>([]);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [cashierId, setCashierId] = useState("all");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    const params = new URLSearchParams({ branch });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    api<{ shifts: CashierShiftReport[] }>(`/cashier-shifts?${params}`)
+      .then(({ shifts: rows }) => {
+        if (active) setShifts(rows || []);
+      })
+      .catch((reason) => {
+        if (active) setError((reason as Error).message);
+      })
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [branch, from, to]);
+
+  const visibleShifts = shifts.filter((shift) =>
+    (cashierId === "all" || shift.cashier_id === cashierId) &&
+    (!from || dateKey(shift.closed_at, data.business.timezone) >= from) &&
+    (!to || dateKey(shift.closed_at, data.business.timezone) <= to),
+  );
+  const cashiers = [...new Map(
+    shifts.map((shift) => [shift.cashier_id, shift.cashier]),
+  )];
+
+  return (
+    <>
+      <PageTitle
+        eyebrow="CASH CONTROL"
+        title="Cashier EOD Reports"
+        description="Submitted shift reconciliations, cash variances, transactions, and items sold."
+        actions={<Link className="text-link" to="/app/reports">Sales & reports</Link>}
+      />
+      <div className="list-filter eod-filter">
+        <div className="period-filter">
+          <label className="field">
+            <span>From</span>
+            <input type="date" aria-label="EOD start date" value={from} onChange={(event) => setFrom(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>To</span>
+            <input type="date" aria-label="EOD end date" min={from} value={to} onChange={(event) => setTo(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Cashier</span>
+            <select aria-label="Filter EOD reports by cashier" value={cashierId} onChange={(event) => setCashierId(event.target.value)}>
+              <option value="all">All cashiers</option>
+              {cashiers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>
+        </div>
+        <small className="muted">{data.business.timezone}</small>
+      </div>
+      {error && <div className="error" role="alert">{error}</div>}
+      {loading ? (
+        <div className="panel"><p className="muted">Loading submitted reconciliations…</p></div>
+      ) : visibleShifts.length ? (
+        <div className="eod-report-list">
+          {visibleShifts.map((shift) => (
+            <article className="panel eod-report" key={shift.id}>
+              <div className="panel-heading">
+                <div>
+                  <h3>{shift.cashier}</h3>
+                  <p>{new Date(shift.opened_at).toLocaleString()} to {new Date(shift.closed_at).toLocaleString()}</p>
+                </div>
+                <Badge tone={shift.variance === 0 ? "mint" : "amber"}>
+                  {shift.variance === 0 ? "Balanced" : `Variance ${money(shift.variance)}`}
+                </Badge>
+              </div>
+              <div className="eod-summary">
+                <div><small>Sales</small><strong>{shift.sales_count}</strong></div>
+                <div><small>Sales total</small><strong>{money(shift.sales_total)}</strong></div>
+                <div><small>Opening cash</small><strong>{money(shift.opening_cash)}</strong></div>
+                <div><small>Expected cash</small><strong>{money(shift.expected_cash)}</strong></div>
+                <div><small>Counted cash</small><strong>{money(shift.counted_cash)}</strong></div>
+              </div>
+              <h4>Items sold</h4>
+              <DataTable
+                rows={shift.report?.items || []}
+                columns={[
+                  { key: "name", label: "Item" },
+                  { key: "sku", label: "SKU" },
+                  { key: "quantity", label: "Quantity" },
+                  { key: "total", label: "Line total", render: (row) => money(row.total) },
+                ]}
+                emptyTitle="No items sold"
+                emptyDescription="This shift has no completed sales."
+              />
+              <h4>Transactions</h4>
+              <DataTable
+                rows={shift.report?.sales || []}
+                columns={[
+                  { key: "reference", label: "Sale" },
+                  { key: "created_at", label: "Time", render: (row) => new Date(row.created_at).toLocaleTimeString() },
+                  { key: "method", label: "Method" },
+                  { key: "total", label: "Total", render: (row) => money(row.total) },
+                ]}
+                emptyTitle="No transactions"
+                emptyDescription="No completed sales were recorded during this shift."
+              />
+            </article>
+          ))}
+        </div>
+      ) : (
+        <Empty
+          title="No submitted shifts"
+          description="Submitted cashier closeouts for this branch and period will appear here."
+          icon={FileText}
+        />
+      )}
+    </>
+  );
+}
+
 export function SettingsPage({ profile = false }: { profile?: boolean }) {
-  const { data, write, notify, setTheme } = useWorkspace();
+  const { data, write, refresh, notify, setTheme } = useWorkspace();
   const [tab, setTab] = useState("general");
   return (
     <>
@@ -1615,13 +1769,27 @@ export function SettingsPage({ profile = false }: { profile?: boolean }) {
               <Form
                 key={String(profile)}
                 onSubmit={async (f) => {
-                  await write(
-                    profile ? "/profile" : "/business",
-                    profile
-                      ? { name: f.get("name"), theme: data.user.theme }
-                      : Object.fromEntries(f),
-                    "PUT",
-                  );
+                  if (profile) {
+                    await write(
+                      "/profile",
+                      { name: f.get("name"), theme: data.user.theme },
+                      "PUT",
+                    );
+                  } else {
+                    const submitted = Object.fromEntries(f);
+                    await api("/business", submitted, "PUT");
+                    const saved = await refresh();
+                    if (saved.business.category !== submitted.category) {
+                      throw new Error(
+                        "Business category was not confirmed by the database. Apply supabase/migrations/20261031210000_business_category_persistence.sql, then try again.",
+                      );
+                    }
+                    if (saved.business.currency !== submitted.currency) {
+                      throw new Error(
+                        "Business currency was not confirmed by the database. Apply supabase/migrations/20261031200000_dynamic_currency_support.sql, then try again.",
+                      );
+                    }
+                  }
                   notify("Your changes have been saved.");
                 }}
               >
@@ -1676,12 +1844,14 @@ export function SettingsPage({ profile = false }: { profile?: boolean }) {
                             name: "country",
                             label: "Country",
                             value: data.business.country,
+                            options: countryOptions,
                           },
                           {
                             name: "currency",
-                            label: "Currency code",
+                            label: "Business currency",
                             value: data.business.currency,
-                            help: "Locked once products or financial records exist.",
+                            options: currencyOptions,
+                            help: "Updates currency labels across this workspace. Historical amounts are not converted.",
                           },
                           {
                             name: "timezone",
@@ -1794,11 +1964,15 @@ export function SettingsPage({ profile = false }: { profile?: boolean }) {
                   "Variant tracking and fractional quantities are available",
                   true,
                 ],
-                [
-                  "Restaurant & bar",
-                  "Tables, kitchen routing and order workflows",
-                  true,
-                ],
+                ...(data.business.category === "Restaurant"
+                  ? [
+                      [
+                        "Restaurant mode",
+                        "Tables, kitchen routing and restaurant order workflows",
+                        true,
+                      ],
+                    ]
+                  : []),
                 [
                   "Online wallets",
                   "Requires a verified provider and reconciliation",
@@ -1847,7 +2021,7 @@ export function SettingsPage({ profile = false }: { profile?: boolean }) {
   );
 }
 export function POS() {
-  const { data, branch, money, scale, write, act, canManage } = useWorkspace();
+  const { data, branch, money, scale, write, act, canManage, notify } = useWorkspace();
   const [search, setSearch] = useState(""),
     [category, setCategory] = useState("All"),
     [cart, setCart] = useState<
@@ -1860,7 +2034,24 @@ export function POS() {
     [cash, setCash] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [cashierShift, setCashierShift] = useState<Row | null>(null);
+  const [shiftLoading, setShiftLoading] = useState(data.user.role === "cashier");
+  const [shiftBusy, setShiftBusy] = useState(false);
+  const [openingCash, setOpeningCash] = useState("0");
+  const [countedCash, setCountedCash] = useState("");
   const key = useRef(crypto.randomUUID());
+  useEffect(() => {
+    if (data.user.role !== "cashier") return;
+    let active = true;
+    setShiftLoading(true);
+    api<{ shift: Row | null }>(
+      `/cashier-shifts?scope=active&branch=${encodeURIComponent(branch)}`,
+    )
+      .then(({ shift }) => active && setCashierShift(shift))
+      .catch((reason) => active && setError((reason as Error).message))
+      .finally(() => active && setShiftLoading(false));
+    return () => { active = false; };
+  }, [branch, data.user.role]);
   const sellableProducts = data.products.flatMap((p) => [
     { ...p, variant_id: undefined, base_name: p.name },
     ...(p.variants || []).map((v: Row) => ({
@@ -1897,6 +2088,12 @@ export function POS() {
         10000n,
     ),
     total = subtotal - discountAmount + taxAmount;
+  const shiftSales = cashierShift
+    ? data.sales.filter((sale) => sale.shift_id === cashierShift.id && sale.status === "completed")
+    : [];
+  const expectedCash = (cashierShift?.opening_cash || 0) + shiftSales
+    .filter((sale) => sale.method === "cash")
+    .reduce((sum, sale) => sum + sale.paid, 0);
   function update(id: string, variantId: string | undefined, delta: number) {
     setError("");
     const product = sellableProducts.find(
@@ -1959,6 +2156,41 @@ export function POS() {
     );
   }
 
+  async function startCashierShift() {
+    setShiftBusy(true);
+    setError("");
+    try {
+      const result = await write("/cashier-shifts", {
+        action: "open",
+        opening_cash: toMinor(openingCash, scale),
+      });
+      setCashierShift(result.shift);
+      notify("Cashier shift started.");
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setShiftBusy(false);
+    }
+  }
+
+  async function submitCashierShift() {
+    setShiftBusy(true);
+    setError("");
+    try {
+      const result = await write("/cashier-shifts", {
+        action: "close",
+        counted_cash: toMinor(countedCash, scale),
+      });
+      setCashierShift(null);
+      setCountedCash("");
+      notify(`Shift reconciliation submitted. Variance: ${money(result.shift.variance)}.`);
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setShiftBusy(false);
+    }
+  }
+
   return (
     <>
       <PageTitle
@@ -1971,6 +2203,58 @@ export function POS() {
           </Badge>
         }
       />
+      {data.user.role === "cashier" && (
+        <section className="panel cashier-shift-panel">
+          <div>
+            <h3>{cashierShift ? "Shift in progress" : "Cashier shift"}</h3>
+            <p className="muted">
+              {cashierShift
+                ? `Started ${new Date(cashierShift.opened_at).toLocaleString()} · ${shiftSales.length} sales · expected cash ${money(expectedCash)}`
+                : "Start a shift before completing sales."}
+            </p>
+          </div>
+          {cashierShift ? (
+            <div className="cashier-shift-controls">
+              <label className="field">
+                <span>Counted cash ({data.business.currency})</span>
+                <input
+                  type="number"
+                  min="0"
+                  step={1 / 10 ** scale}
+                  value={countedCash}
+                  onChange={(event) => setCountedCash(event.target.value)}
+                  placeholder={(expectedCash / 10 ** scale).toFixed(scale)}
+                />
+              </label>
+              <Button
+                onClick={() => void submitCashierShift()}
+                disabled={shiftBusy || !countedCash}
+              >
+                <Square size={16} /> Submit EOD
+              </Button>
+            </div>
+          ) : (
+            <div className="cashier-shift-controls">
+              <label className="field">
+                <span>Opening cash ({data.business.currency})</span>
+                <input
+                  type="number"
+                  min="0"
+                  step={1 / 10 ** scale}
+                  value={openingCash}
+                  onChange={(event) => setOpeningCash(event.target.value)}
+                />
+              </label>
+              <Button
+                onClick={() => void startCashierShift()}
+                disabled={shiftBusy || shiftLoading}
+              >
+                <Play size={16} /> {shiftLoading ? "Loading shift…" : "Start shift"}
+              </Button>
+            </div>
+          )}
+        </section>
+      )}
       <div className="pos-layout">
         <section className="pos-catalog">
           <label className="search pos-search">
@@ -1994,7 +2278,7 @@ export function POS() {
               (c) => (
                 <button
                   className={c === category ? "active" : ""}
-                  onClick={() => setCategory(c)}
+                  disabled={busy || !cart.length || total < 0 || (data.user.role === "cashier" && (!cashierShift || shiftLoading))}
                   key={c}
                 >
                   {c}

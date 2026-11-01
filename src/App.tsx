@@ -22,6 +22,7 @@ import {
   TriangleAlert,
   Store,
   ShoppingCart,
+  ClipboardCheck,
   Contact,
   Truck,
   ReceiptText,
@@ -47,6 +48,7 @@ import {
   Inventory,
   Records,
   Reports,
+  CashierEodReports,
   Restaurant,
   SettingsPage,
   Transactions,
@@ -58,7 +60,7 @@ type Action = { type: string; record?: Row };
 type Context = {
   data: Workspace;
   branch: string;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<Workspace>;
   money: (n: number) => string;
   scale: number;
   act: (type: string, record?: Row) => void;
@@ -83,6 +85,7 @@ const links = [
   { to: "/app/inventory", label: "Inventory", icon: Package },
   { to: "/app/sales", label: "Sales", icon: ReceiptText },
   { to: "/app/reports", label: "Reports", icon: BarChart3 },
+  { to: "/app/reports/eod", label: "Cashier EOD Reports", icon: ClipboardCheck },
   { to: "/app/stock-alerts", label: "Stock alerts", icon: TriangleAlert },
   {
     to: "/app/customers",
@@ -130,6 +133,7 @@ function WorkspaceApp({
     setData(d);
     onUser(d.user);
     setError("");
+    return d;
   }, [branch, onUser]);
   useEffect(() => {
     let active = true;
@@ -408,6 +412,10 @@ function WorkspaceApp({
               <Route
                 path="reports"
                 element={canManage ? <Reports /> : <Navigate to="/app" />}
+              />
+              <Route
+                path="reports/eod"
+                element={canManage ? <CashierEodReports /> : <Navigate to="/app" />}
               />
               <Route
                 path="transactions"

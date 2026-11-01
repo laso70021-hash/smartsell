@@ -233,6 +233,18 @@ test("real retail workflows reconcile; retries, permissions and tenant boundarie
   assert.equal(cw.events.length, 0);
   assert.equal(cw.products[0].cost, 0);
   assert.equal(cw.sales.length, 0);
+  const saleWithoutShift = await cashier("/sales", {
+    ...sale,
+    discount: 0,
+    tax_bps: 0,
+    idempotency: crypto.randomUUID(),
+  });
+  assert.equal(saleWithoutShift.status, 409);
+  const openedShift = await cashier("/cashier-shifts", {
+    action: "open",
+    opening_cash: 10000,
+  });
+  assert.equal(openedShift.status, 201);
   const cashSale = await cashier("/sales", {
     ...sale,
     discount: 0,
@@ -240,6 +252,21 @@ test("real retail workflows reconcile; retries, permissions and tenant boundarie
     idempotency: crypto.randomUUID(),
   });
   assert.equal(cashSale.status, 201);
+  const closedShift = await cashier("/cashier-shifts", {
+    action: "close",
+    counted_cash: 10000 + cashSale.total,
+  });
+  assert.equal(closedShift.status, 200);
+  assert.equal(closedShift.shift.expected_cash, 10000 + cashSale.total);
+  assert.equal(closedShift.shift.variance, 0);
+  assert.equal(closedShift.shift.sales_count, 1);
+  assert.equal(closedShift.shift.report.items[0].name, "Tea");
+  assert.equal(closedShift.shift.report.items[0].quantity, 2);
+  const eodReports = await a(`/cashier-shifts?branch=${branch}`);
+  assert.equal(eodReports.shifts.length, 1);
+  assert.equal(eodReports.shifts[0].cashier, "Cashier");
+  assert.equal(eodReports.shifts[0].report.sales.length, 1);
+  assert.equal((await cashier(`/cashier-shifts?branch=${branch}`)).status, 403);
   assert.equal(
     (await cashier("/sales/" + cashSale.id + "/refund", {})).status,
     403,
@@ -262,13 +289,23 @@ test("real retail workflows reconcile; retries, permissions and tenant boundarie
   assert.equal(movementTotal, wa.products[0].stock);
   assert.equal(wa.sales.find((s) => s.id === checkout.id).status, "refunded");
   assert.equal(
-    (await a("/business", { ...wa.business, currency: "USD" }, "PUT")).status,
-    400,
+    (await a("/business", { ...wa.business, currency: "JPY" }, "PUT")).status,
+    200,
   );
+  wa = await a("/workspace");
+  assert.equal(wa.business.currency, "JPY");
   wb = await b("/workspace");
   assert.equal(wb.products.length, 0);
   assert.equal(wb.sales.length, 0);
   assert.equal(wb.events.length, 0);
+});
+test("new businesses default to Tanzanian shillings when no currency is selected", async () => {
+  const c = client();
+  const details = register("tzs-default@example.com");
+  delete details.currency;
+  assert.equal((await c("/auth/register", details)).status, 201);
+  const workspace = await c("/workspace");
+  assert.equal(workspace.business.currency, "TZS");
 });
 test("CSV batch is all-or-nothing and duplicate SKU errors are controlled", async () => {
   const c = client();

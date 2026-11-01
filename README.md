@@ -37,6 +37,8 @@ The production build includes an installable PWA shell. Its service worker cache
 
 Before using a deployment, apply and verify the required Supabase migrations and storage policies. After Vercel assigns the production domain, add its origin and `/login` URL to Supabase Auth's allowed redirect URLs, set the Auth Site URL to the production origin, and add the exact production origin to the `ALLOWED_ORIGINS` Edge Function secret before redeploying `invite-team-member`. Repeat for a custom domain after it is linked. Keep service-role, secret, and email-provider keys in server-side Supabase secrets only.
 
+Restaurant tables and kitchen workflows require applying [the Restaurant workflow migration](supabase/migrations/20261101084932_smartsell_restaurant_workflow.sql). It creates tenant- and branch-scoped Restaurant records, enables fractional stock movement, and exposes the guarded Restaurant RPC. The branch-edit migration also removes an invalid hosted timestamp trigger.
+
 Invoice templates require applying [the sales-invoice migration](supabase/migrations/20261031152151_sales_invoice_templates.sql) to the target Supabase project before using the invoice template selector or printing invoices. Receipt templates remain available independently.
 
 ## Implemented workflows

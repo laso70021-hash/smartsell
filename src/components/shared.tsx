@@ -132,78 +132,120 @@ export type FieldSpec = {
   otherFieldName?: string;
 };
 export function Fields({ fields }: { fields: FieldSpec[] }) {
-  const [selections, setSelections] = useState<Record<string, string>>(() =>
+  const initialValues = () =>
     Object.fromEntries(
-      fields.filter((f) => f.otherOption).map((f) => [f.name, String(f.value || "")]),
-    ),
-  );
+      fields.flatMap((f) => [
+        [f.name, String(f.value ?? "")],
+        ...(f.otherOption
+          ? [[f.otherFieldName || `${f.name}_other`, String(f.otherValue ?? "")]]
+          : []),
+      ]),
+    );
+  const [values, setValues] = useState<Record<string, string>>(initialValues);
+
+  useEffect(() => {
+    setValues((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const field of fields) {
+        const nextValue = String(field.value ?? "");
+        if (next[field.name] !== nextValue) {
+          next[field.name] = nextValue;
+          changed = true;
+        }
+        if (field.otherOption) {
+          const otherName = field.otherFieldName || `${field.name}_other`;
+          const otherValue = String(field.otherValue ?? "");
+          if (next[otherName] !== otherValue) {
+            next[otherName] = otherValue;
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [
+    fields
+      .map(
+        (field) =>
+          `${field.name}:${String(field.value ?? "")}:${field.otherOption ? field.otherFieldName || `${field.name}_other` : ""}:${String(field.otherValue ?? "")}`,
+      )
+      .join("|"),
+  ]);
+
+  const updateField = (name: string, value: string) =>
+    setValues((current) => ({ ...current, [name]: value }));
+
   return (
     <div className="form-grid">
-      {fields.map((f) => (
-        <label
-          className={"field " + (f.type === "textarea" ? "full" : "")}
-          key={f.name}
-        >
-          <span>
-            {f.label}
-            {f.required === false ? <small>Optional</small> : null}
-          </span>
-          {f.options ? (
-            <select
-              name={f.name}
-              value={f.otherOption ? selections[f.name] || f.value || "" : f.value ?? ""}
-              onChange={
-                f.otherOption
-                  ? (e) =>
-                      setSelections((s) => ({ ...s, [f.name]: e.target.value }))
-                  : undefined
-              }
-              required={f.required !== false}
-            >
-              {f.value === undefined && (
-                <option value="" disabled>
-                  Select {f.label.toLowerCase()}
-                </option>
-              )}
-              {f.options.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          ) : f.type === "textarea" ? (
-            <textarea
-              name={f.name}
-              defaultValue={f.value}
-              required={f.required !== false}
-              maxLength={500}
-            />
-          ) : (
-            <input
-              name={f.name}
-              type={f.type || "text"}
-              defaultValue={f.value}
-              required={f.required !== false}
-              min={f.min ?? (f.type === "number" ? 0 : undefined)}
-              step={f.step}
-              placeholder={f.placeholder}
-              maxLength={f.maxLength ?? 200}
-              autoComplete={f.type === "password" ? "new-password" : undefined}
-            />
-          )}{" "}
-          {f.otherOption && selections[f.name] === "Other" && (
-            <input
-              name={f.otherFieldName || `${f.name}_other`}
-              aria-label={`Enter ${f.label.toLowerCase()}`}
-              placeholder={`Enter ${f.label.toLowerCase()}`}
-              defaultValue={f.otherValue || ""}
-              required
-              maxLength={200}
-            />
-          )}
-          {f.help && <small>{f.help}</small>}
-        </label>
-      ))}
+      {fields.map((f) => {
+        const fieldValue = values[f.name] ?? String(f.value ?? "");
+        const customKey = f.otherFieldName || `${f.name}_other`;
+        const customValue = values[customKey] ?? String(f.otherValue ?? "");
+        return (
+          <label
+            className={"field " + (f.type === "textarea" ? "full" : "")}
+            key={f.name}
+          >
+            <span>
+              {f.label}
+              {f.required === false ? <small>Optional</small> : null}
+            </span>
+            {f.options ? (
+              <select
+                name={f.name}
+                value={fieldValue}
+                onChange={(e) => updateField(f.name, e.target.value)}
+                required={f.required !== false}
+              >
+                {f.value === undefined && (
+                  <option value="" disabled>
+                    Select {f.label.toLowerCase()}
+                  </option>
+                )}
+                {f.options.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : f.type === "textarea" ? (
+              <textarea
+                name={f.name}
+                value={fieldValue}
+                onChange={(e) => updateField(f.name, e.target.value)}
+                required={f.required !== false}
+                maxLength={500}
+              />
+            ) : (
+              <input
+                name={f.name}
+                type={f.type || "text"}
+                value={fieldValue}
+                onChange={(e) => updateField(f.name, e.target.value)}
+                required={f.required !== false}
+                min={f.min ?? (f.type === "number" ? 0 : undefined)}
+                step={f.step}
+                placeholder={f.placeholder}
+                maxLength={f.maxLength ?? 200}
+                autoComplete={f.type === "password" ? "new-password" : undefined}
+              />
+            )}{" "}
+            {f.otherOption && fieldValue === "Other" && (
+              <input
+                name={customKey}
+                aria-label={`Enter ${f.label.toLowerCase()}`}
+                placeholder={`Enter ${f.label.toLowerCase()}`}
+                value={customValue}
+                onChange={(e) => updateField(customKey, e.target.value)}
+                required
+                maxLength={200}
+              />
+            )}
+            {f.help && <small>{f.help}</small>}
+          </label>
+        );
+      })}
     </div>
   );
 }

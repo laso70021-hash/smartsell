@@ -249,7 +249,7 @@ export function createApp({
         email,
         password: z.string().min(10).max(200),
         business: text,
-        currency,
+        currency: currency.default("TZS"),
         country: text,
         timezone: text,
         branch: text,
@@ -260,7 +260,10 @@ export function createApp({
     if (v.category === "Other" && !v.custom_category)
       fail("Enter your business category.");
     try {
-      new Intl.NumberFormat("en", { style: "currency", currency: v.currency });
+      new Intl.NumberFormat("en", {
+        style: "currency",
+        currency: v.currency || "TZS",
+      });
       new Intl.DateTimeFormat("en", { timeZone: v.timezone });
     } catch {
       fail("Invalid currency or timezone.");
@@ -433,6 +436,141 @@ export function createApp({
           ),
     });
   });
+      app.get("/api/cashier-shifts", (req, res) => {
+        const u = req.user;
+        if (req.query.scope === "active") {
+          if (u.role !== "cashier") return res.json({ shift: null });
+          const shift = get(
+            "SELECT * FROM cashier_shifts WHERE cashier_id=? AND closed_at IS NULL",
+            u.id,
+          );
+          return res.json({ shift: shift || null });
+        }
+        role(u, ["owner", "manager"]);
+        const branchId = String(req.query.branch || u.branch_id);
+        branch(u, branchId);
+        const cashierId = String(req.query.cashier || "");
+        if (cashierId && !get(
+          "SELECT id FROM users WHERE id=? AND business_id=? AND role='cashier'",
+          cashierId,
+          u.business_id,
+        )) fail("Cashier not found.", 404);
+        const shifts = all(
+          `SELECT s.*,u.name cashier FROM cashier_shifts s JOIN users u ON u.id=s.cashier_id
+           WHERE s.business_id=? AND s.branch_id=? AND s.closed_at IS NOT NULL
+           ${cashierId ? "AND s.cashier_id=?" : ""} ORDER BY s.closed_at DESC`,
+          ...[u.business_id, branchId, ...(cashierId ? [cashierId] : [])],
+        ).map((shift) => ({ ...shift, report: JSON.parse(shift.report || "{}") }));
+        res.json({ shifts });
+      });
+      app.post("/api/cashier-shifts", (req, res) => {
+        const u = req.user;
+        const body = z.object({
+          action: z.enum(["open", "close"]),
+          opening_cash: amount.optional(),
+          counted_cash: amount.optional(),
+        }).parse(req.body);
+        role(u, ["cashier"]);
+        const activeBranch = branch(u, u.branch_id);
+        if (body.action === "open") {
+          if (body.opening_cash === undefined) fail("Enter the opening cash amount.");
+          const shift = tx(() => {
+            if (get("SELECT id FROM cashier_shifts WHERE cashier_id=? AND closed_at IS NULL", u.id))
+              fail("You already have an open shift.", 409);
+            const record = {
+              id: randomUUID(),
+              business_id: u.business_id,
+              branch_id: activeBranch.id,
+              cashier_id: u.id,
+              opened_at: now(),
+              opening_cash: body.opening_cash,
+            };
+            run(
+              "INSERT INTO cashier_shifts(id,business_id,branch_id,cashier_id,opened_at,opening_cash) VALUES(?,?,?,?,?,?)",
+              record.id,
+              record.business_id,
+              record.branch_id,
+              record.cashier_id,
+              record.opened_at,
+              record.opening_cash,
+            );
+            event(u, activeBranch.id, "Cashier shifts", u.name, "Shift opened", record.id, record.opening_cash);
+            return record;
+          });
+          return res.status(201).json({ shift });
+        }
+        if (body.counted_cash === undefined) fail("Enter the counted cash amount.");
+        const closed = tx(() => {
+          const shift = get(
+            "SELECT * FROM cashier_shifts WHERE cashier_id=? AND closed_at IS NULL",
+            u.id,
+          );
+          if (!shift) fail("Open a shift before submitting a reconciliation.", 409);
+          const sales = all(
+            "SELECT * FROM sales WHERE shift_id=? AND status='completed' ORDER BY created_at",
+            shift.id,
+          );
+          const soldItems = new Map();
+          const saleReports = sales.map((sale) => {
+            const saleItems = all("SELECT * FROM sale_items WHERE sale_id=?", sale.id);
+            for (const item of saleItems) {
+              const current = soldItems.get(item.product_id) || {
+                id: item.product_id,
+                product_id: item.product_id,
+                name: item.name,
+                sku: item.sku,
+                quantity: 0,
+                total: 0,
+              };
+              current.quantity += item.quantity;
+              current.total += quantityAmount(
+                item.price,
+                item.quantity_milli || quantityMilli(item.quantity),
+              );
+              soldItems.set(item.product_id, current);
+            }
+            return {
+              id: sale.id,
+              reference: sale.reference,
+              created_at: sale.created_at,
+              total: sale.total,
+              paid: sale.paid,
+              method: sale.method,
+              items: saleItems.map(({ name, sku, quantity, price }) => ({ name, sku, quantity, price })),
+            };
+          });
+          const salesTotal = sales.reduce((sum, sale) => sum + sale.total, 0);
+          const expectedCash = shift.opening_cash + sales
+            .filter((sale) => sale.method === "cash")
+            .reduce((sum, sale) => sum + sale.paid, 0);
+          const report = { sales: saleReports, items: [...soldItems.values()] };
+          const closedAt = now();
+          const variance = body.counted_cash - expectedCash;
+          run(
+            "UPDATE cashier_shifts SET closed_at=?,expected_cash=?,counted_cash=?,variance=?,sales_count=?,sales_total=?,report=? WHERE id=?",
+            closedAt,
+            expectedCash,
+            body.counted_cash,
+            variance,
+            sales.length,
+            salesTotal,
+            JSON.stringify(report),
+            shift.id,
+          );
+          event(u, shift.branch_id, "Cashier shifts", u.name, "Shift reconciliation submitted", shift.id, variance);
+          return {
+            ...shift,
+            closed_at: closedAt,
+            expected_cash: expectedCash,
+            counted_cash: body.counted_cash,
+            variance,
+            sales_count: sales.length,
+            sales_total: salesTotal,
+            report,
+          };
+        });
+        res.json({ shift: closed });
+      });
   const productSchema = z.object({
     name: text,
     sku: text,
@@ -774,6 +912,11 @@ export function createApp({
     if (v.method === "credit" && (!v.customer_id || u.role === "cashier"))
       fail("Credit sales require a customer and manager authorization.", 403);
     const result = tx(() => {
+      const activeShift = u.role === "cashier"
+        ? get("SELECT id FROM cashier_shifts WHERE cashier_id=? AND branch_id=? AND closed_at IS NULL", u.id, v.branch_id)
+        : null;
+      if (u.role === "cashier" && !activeShift)
+        fail("Open a cashier shift before completing a sale.", 409);
       const lines = v.items.map((i) => {
         const product = owned("products", i.product_id, u);
         const variant = i.variant_id
@@ -822,7 +965,7 @@ export function createApp({
       const id = randomUUID(),
         reference = "SS-" + id.slice(0, 8).toUpperCase();
       run(
-        "INSERT INTO sales(id,business_id,branch_id,customer_id,reference,total,paid,discount,tax,method,created_at,actor_id,idempotency,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO sales(id,business_id,branch_id,customer_id,reference,total,paid,discount,tax,method,created_at,actor_id,idempotency,payload,shift_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         id,
         u.business_id,
         v.branch_id,
@@ -837,6 +980,7 @@ export function createApp({
         u.id,
         v.idempotency,
         payload,
+        activeShift?.id || null,
       );
       for (const p of lines) {
         movement(u, v.branch_id, p.id, -p.quantity, "Sale", reference, p.variant_id);
@@ -1542,20 +1686,6 @@ export function createApp({
     } catch {
       fail("Invalid timezone.");
     }
-    const old = owned("businesses", u.business_id, u);
-    if (
-      v.currency !== old.currency &&
-      (get("SELECT id FROM sales WHERE business_id=? LIMIT 1", u.business_id) ||
-        get(
-          "SELECT id FROM products WHERE business_id=? LIMIT 1",
-          u.business_id,
-        ) ||
-        get(
-          "SELECT id FROM expenses WHERE business_id=? LIMIT 1",
-          u.business_id,
-        ))
-    )
-      fail("Currency is locked after catalog or financial records exist.");
     tx(() => {
       run(
         "UPDATE businesses SET name=?,currency=?,country=?,timezone=?,email=?,phone=?,address=?,tax_id=?,category=?,custom_category=? WHERE id=?",

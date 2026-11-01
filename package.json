@@ -11,11 +11,18 @@
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@editorjs/delimiter": "1.4.2",
+    "@editorjs/editorjs": "2.31.7",
+    "@editorjs/header": "2.8.9",
+    "@editorjs/list": "2.0.9",
+    "@editorjs/quote": "2.7.6",
+    "@editorjs/table": "2.4.6",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-slot": "^1.2.3",
     "@supabase/supabase-js": "2.118.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "editorjs-drag-drop": "1.1.16",
     "express": "^5.1.0",
     "idb": "8.0.4",
     "lucide-react": "^0.468.0",
