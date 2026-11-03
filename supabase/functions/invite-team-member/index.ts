@@ -1,9 +1,13 @@
 import { createClient } from "npm:@supabase/supabase-js@2.118.0";
 
-const allowedOrigins = (Deno.env.get("ALLOWED_ORIGINS") || "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const configuredOrigins = [
+  Deno.env.get("ALLOWED_ORIGINS"),
+  Deno.env.get("APP_ORIGIN"),
+  Deno.env.get("PUBLIC_APP_URL"),
+  Deno.env.get("SITE_URL"),
+].flatMap((value) => (value || "").split(",").map((item) => item.trim()).filter(Boolean));
+const allowedOrigins = [...new Set(configuredOrigins)];
+const defaultOrigin = Deno.env.get("APP_ORIGIN") || Deno.env.get("PUBLIC_APP_URL") || Deno.env.get("SITE_URL");
 
 function response(
   body: Record<string, unknown>,
@@ -95,11 +99,12 @@ Deno.serve(async (request) => {
   if (!invitation.email || !invitation.name)
     return response({ error: "The invitation record was created without a valid email or name." }, 500, origin);
 
+  const inviterOrigin = defaultOrigin || origin;
   const { error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(
     invitation.email,
     {
       data: { name: invitation.name },
-      redirectTo: new URL("/login", origin).toString(),
+      redirectTo: new URL("/login", inviterOrigin).toString(),
     },
   );
   if (inviteError) {

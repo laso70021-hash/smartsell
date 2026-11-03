@@ -48,6 +48,9 @@ export type User = {
   branch_id: string;
   role: "owner" | "manager" | "cashier";
   theme: "dark" | "light";
+  account_status?: "active" | "pending" | "suspended";
+  expires_at?: string | null;
+  is_admin?: boolean;
 };
 export type Workspace = {
   user: User;
@@ -153,8 +156,36 @@ async function identity() {
   }
   return { user: member };
 }
+export function resolveAppOrigin() {
+  const configured =
+    (typeof import.meta !== "undefined" && import.meta.env
+      ? import.meta.env.VITE_APP_URL ||
+        import.meta.env.VITE_PUBLIC_APP_URL ||
+        import.meta.env.VITE_SITE_URL ||
+        import.meta.env.VITE_ORIGIN
+      : "") ||
+    (typeof process !== "undefined" && process.env
+      ? process.env.APP_ORIGIN ||
+        process.env.PUBLIC_APP_URL ||
+        process.env.SITE_URL ||
+        process.env.VITE_APP_URL ||
+        process.env.VITE_PUBLIC_APP_URL
+      : "");
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      return configured.replace(/\/+$/, "");
+    }
+  }
+  if (typeof window !== "undefined" && window.location?.origin)
+    return window.location.origin;
+  return "https://smartsell.swahivo.com";
+}
+
 function authRedirectUrl(path: string) {
-  return new URL(path, window.location.origin).toString();
+  const baseOrigin = resolveAppOrigin();
+  return new URL(path, `${baseOrigin.replace(/\/+$/, "")}/`).toString();
 }
 
 async function signUp(body: Record<string, any>) {

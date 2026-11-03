@@ -7,7 +7,7 @@ import {
   createHash,
 } from "node:crypto";
 import { z } from "zod";
-import { openDatabase } from "./db.mjs";
+import { openDatabase, isAccountActive } from "./db.mjs";
 const text = z.string().trim().min(1).max(200);
 const optional = z.string().trim().max(500).default("");
 const amount = z.number().int().min(0).max(1_000_000_000);
@@ -187,18 +187,16 @@ export function createApp({
   app.use("/api", (req, res, next) => {
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       const origin = req.get("origin");
-      if (
-        origin &&
-        ![
-          process.env.APP_ORIGIN,
-          "http://127.0.0.1:5173",
-          "http://localhost:5173",
-          `http://127.0.0.1:${process.env.PORT || 3001}`,
-          `http://localhost:${process.env.PORT || 3001}`,
-        ]
-          .filter(Boolean)
-          .includes(origin)
-      )
+      const allowedOrigins = [
+        process.env.APP_ORIGIN,
+        process.env.PUBLIC_APP_URL,
+        process.env.SITE_URL,
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        `http://127.0.0.1:${process.env.PORT || 3001}`,
+        `http://localhost:${process.env.PORT || 3001}`,
+      ].filter(Boolean);
+      if (origin && !allowedOrigins.includes(origin))
         return res.status(403).json({ error: "Request origin denied." });
       if (!req.is("application/json"))
         return res.status(415).json({ error: "JSON content type required." });
@@ -291,7 +289,7 @@ export function createApp({
         v.branch,
       );
       run(
-        "INSERT INTO users(id,business_id,branch_id,name,email,password,role) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO users(id,business_id,branch_id,name,email,password,role,active,account_status,expires_at,is_admin,theme) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         u,
         b,
         br,
@@ -299,6 +297,11 @@ export function createApp({
         v.email,
         passwordHash(v.password),
         "owner",
+        1,
+        "active",
+        null,
+        0,
+        "dark",
       );
       return u;
     });
@@ -311,8 +314,8 @@ export function createApp({
     const v = z
       .object({ email, password: z.string().min(1).max(200) })
       .parse(req.body);
-    const u = get("SELECT * FROM users WHERE email=? AND active=1", v.email);
-    if (!u || !passwordCheck(v.password, u.password))
+    const u = get("SELECT * FROM users WHERE email=?", v.email);
+    if (!u || !passwordCheck(v.password, u.password) || !isAccountActive(u))
       fail("Email or password is incorrect.", 401);
     session(res, u.id);
     res.json({ user: safeUser(u) });
@@ -326,11 +329,12 @@ export function createApp({
     const u =
       raw &&
       get(
-        "SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token=? AND sessions.expires>? AND users.active=1",
+        "SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token=? AND sessions.expires>?",
         hash(raw),
         Date.now(),
       );
-    if (!u) return res.status(401).json({ error: "Sign in to continue." });
+    if (!u || !isAccountActive(u))
+      return res.status(401).json({ error: "Sign in to continue." });
     req.user = u;
     next();
   });
@@ -423,7 +427,7 @@ export function createApp({
       staff:
         u.role === "owner"
           ? all(
-              "SELECT id,name,email,role,branch_id,active FROM users WHERE business_id=?",
+              "SELECT id,name,email,role,branch_id,active,account_status,expires_at FROM users WHERE business_id=? ORDER BY name",
               u.business_id,
             )
           : [],
@@ -1582,13 +1586,16 @@ export function createApp({
         password: z.string().min(10).max(200),
         role: z.enum(["manager", "cashier"]),
         branch_id: uuid,
+        account_status: z.enum(["active", "suspended", "pending"]).default("active"),
+        expires_at: z.string().optional().default(""),
       })
       .parse(req.body);
     branch(u, v.branch_id);
     const id = randomUUID();
+    const expiresAt = v.expires_at && v.expires_at.trim() ? v.expires_at : null;
     tx(() => {
       run(
-        "INSERT INTO users(id,business_id,branch_id,name,email,password,role) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO users(id,business_id,branch_id,name,email,password,role,active,account_status,expires_at,is_admin,theme) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         id,
         u.business_id,
         v.branch_id,
@@ -1596,6 +1603,11 @@ export function createApp({
         v.email,
         passwordHash(v.password),
         v.role,
+        v.account_status === "active" ? 1 : 0,
+        v.account_status,
+        expiresAt,
+        0,
+        "dark",
       );
       event(u, v.branch_id, "Staff", v.name, "Staff account created", id);
     });
@@ -1609,18 +1621,24 @@ export function createApp({
         name: text,
         role: z.enum(["manager", "cashier"]),
         branch_id: uuid,
+        account_status: z.enum(["active", "suspended", "pending"]).default("active"),
+        expires_at: z.string().optional().default(""),
       })
       .parse(req.body);
     const member = owned("users", req.params.id, u);
     if (member.role === "owner")
       fail("Owner accounts cannot be edited here.", 403);
     branch(u, v.branch_id);
+    const expiresAt = v.expires_at && v.expires_at.trim() ? v.expires_at : null;
     tx(() => {
       run(
-        "UPDATE users SET name=?,role=?,branch_id=? WHERE id=? AND business_id=?",
+        "UPDATE users SET name=?,role=?,branch_id=?,active=?,account_status=?,expires_at=? WHERE id=? AND business_id=?",
         v.name,
         v.role,
         v.branch_id,
+        v.account_status === "active" ? 1 : 0,
+        v.account_status,
+        expiresAt,
         member.id,
         u.business_id,
       );
@@ -1630,7 +1648,7 @@ export function createApp({
         v.branch_id,
         "Staff",
         v.name,
-        `Staff details updated; role ${member.role} → ${v.role}; sessions revoked`,
+        `Staff details updated; role ${member.role} → ${v.role}; access status ${member.account_status || "active"} → ${v.account_status}; sessions revoked`,
         member.id,
       );
     });
@@ -1642,10 +1660,12 @@ export function createApp({
     const member = owned("users", req.params.id, u);
     if (member.role === "owner")
       fail("Owner accounts cannot be disabled here.");
+    const nextStatus = member.account_status === "active" ? "suspended" : "active";
     tx(() => {
       run(
-        "UPDATE users SET active=? WHERE id=?",
-        member.active ? 0 : 1,
+        "UPDATE users SET active=?,account_status=? WHERE id=?",
+        nextStatus === "active" ? 1 : 0,
+        nextStatus,
         member.id,
       );
       run("DELETE FROM sessions WHERE user_id=?", member.id);
@@ -1654,9 +1674,9 @@ export function createApp({
         member.branch_id,
         "Staff",
         member.name,
-        member.active
-          ? "Account disabled; sessions revoked"
-          : "Account enabled",
+        nextStatus === "active"
+          ? "Account enabled"
+          : "Account disabled; sessions revoked",
         member.id,
       );
     });

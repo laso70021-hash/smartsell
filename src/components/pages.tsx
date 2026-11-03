@@ -1138,21 +1138,43 @@ export function Records({ kind }: { kind: string }) {
                       "—",
                   },
                   {
-                    key: "active",
-                    label: "Status",
-                    render: (r) => (
-                      <Badge
-                        tone={
-                          r.invited ? "amber" : r.active ? "mint" : "red"
-                        }
-                      >
-                        {r.invited
-                          ? "Invitation pending"
-                          : r.active
-                            ? "Active"
-                            : "Disabled"}
-                      </Badge>
-                    ),
+                    key: "account_status",
+                    label: "Access",
+                    render: (r) => {
+                      const status =
+                        r.account_status || (r.active ? "active" : "suspended");
+                      const tone =
+                        status === "suspended"
+                          ? "red"
+                          : status === "pending"
+                            ? "amber"
+                            : "mint";
+                      const label =
+                        status === "suspended"
+                          ? "Suspended"
+                          : status === "pending"
+                            ? "Pending"
+                            : "Active";
+                      return <Badge tone={tone}>{label}</Badge>;
+                    },
+                  },
+                  {
+                    key: "expires_at",
+                    label: "Expiry",
+                    render: (r) => {
+                      if (!r.expires_at) return "Never";
+                      const date = new Date(r.expires_at);
+                      const expired = date.getTime() <= Date.now();
+                      return (
+                        <span className={expired ? "muted" : ""}>
+                          {date.toLocaleDateString("en-GB", {
+                            day: "2-digit",
+                            month: "short",
+                            year: "numeric",
+                          })}
+                        </span>
+                      );
+                    },
                   },
                   {
                     key: "actions",
@@ -1172,7 +1194,9 @@ export function Records({ kind }: { kind: string }) {
                             size="sm"
                             onClick={() => act("staff-toggle", r)}
                           >
-                            {r.active ? "Disable access" : "Enable access"}
+                            {(r.account_status || (r.active ? "active" : "suspended")) === "suspended"
+                              ? "Restore access"
+                              : "Suspend access"}
                           </Button>
                         </div>
                       ),

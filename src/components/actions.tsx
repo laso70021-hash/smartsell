@@ -962,8 +962,8 @@ export function ActionDialog({
   } else if (type === "staff") {
     title = "Add a team member";
     description =
-      "Send a secure sign-in invitation. Your teammate will set their own password.";
-    submit = "Send invitation";
+      "Create a user profile, assign a role and choose whether access must be suspended or expire on a date.";
+    submit = "Create team member";
     fields = [
       { name: "name", label: "Full name" },
       { name: "email", label: "Email", type: "email" },
@@ -982,14 +982,34 @@ export function ActionDialog({
         value: branch,
         options: branchOptions,
       },
+      {
+        name: "account_status",
+        label: "Access status",
+        value: "active",
+        options: [
+          { value: "active", label: "Active" },
+          { value: "pending", label: "Pending review" },
+          { value: "suspended", label: "Suspended" },
+        ],
+      },
+      {
+        name: "expires_at",
+        label: "Access expires on",
+        type: "date",
+        required: false,
+      },
     ];
     handler = async (f) => {
-      await api("/team-invitations", Object.fromEntries(f));
+      const payload = Object.fromEntries(f);
+      await write("/staff", {
+        ...payload,
+        expires_at: payload.expires_at || "",
+      });
       await refresh();
     };
   } else if (type === "staff-edit") {
     title = "Edit team member";
-    description = `Update ${r?.name}'s role or assigned branch. Their existing sessions will be revoked after saving.`;
+    description = `Update ${r?.name}'s role, assigned branch and account lifecycle. Their existing sessions will be revoked after saving.`;
     submit = "Save team member";
     fields = [
       { name: "name", label: "Full name", value: r?.name },
@@ -1008,9 +1028,30 @@ export function ActionDialog({
         value: r?.branch_id,
         options: branchOptions,
       },
+      {
+        name: "account_status",
+        label: "Access status",
+        value: (r?.account_status || (r?.active ? "active" : "suspended")) as string,
+        options: [
+          { value: "active", label: "Active" },
+          { value: "pending", label: "Pending review" },
+          { value: "suspended", label: "Suspended" },
+        ],
+      },
+      {
+        name: "expires_at",
+        label: "Access expires on",
+        type: "date",
+        required: false,
+        value: r?.expires_at ? new Date(r.expires_at).toISOString().slice(0, 10) : "",
+      },
     ];
     handler = async (f) => {
-      await write(`/staff/${r?.id}`, Object.fromEntries(f), "PUT");
+      const payload = Object.fromEntries(f);
+      await write(`/staff/${r?.id}`, {
+        ...payload,
+        expires_at: payload.expires_at || "",
+      }, "PUT");
     };
   } else if (type === "receive") {
     title = "Receive purchase goods";
@@ -1057,9 +1098,10 @@ export function ActionDialog({
       await write(`/sales/${r?.id}/refund`, {});
     };
   } else if (type === "staff-toggle") {
-    title = r?.active ? "Disable staff access?" : "Enable staff access?";
+    const isSuspended = (r?.account_status || (r?.active ? "active" : "suspended")) === "suspended";
+    title = isSuspended ? "Restore staff access?" : "Suspend staff access?";
     description = `${r?.name} · ${r?.email}`;
-    submit = r?.active ? "Disable access" : "Enable access";
+    submit = isSuspended ? "Restore access" : "Suspend access";
     handler = async () => {
       await write(`/staff/${r?.id}/toggle`, {});
     };
