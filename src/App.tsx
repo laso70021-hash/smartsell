@@ -192,6 +192,10 @@ function WorkspaceApp({
   };
   const isSystemAdmin = isSystemAdminUser(user);
   const canManage = isSystemAdmin || user.role !== "cashier";
+  const supabaseConfigured = Boolean(
+    import.meta.env.VITE_SUPABASE_URL &&
+      import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+  );
   if (!data || loading)
     return (
       <div className="app-loading">
@@ -302,7 +306,11 @@ function WorkspaceApp({
           </nav>
           <div className="sidebar-bottom">
             <div className="local-status">
-              <span className="live-dot" /> Supabase connected
+              <span
+                className="live-dot"
+                style={{ background: supabaseConfigured ? "#22c55e" : "#f59e0b" }}
+              />
+              {supabaseConfigured ? "Supabase ready" : "Needs Supabase config"}
               <ShieldCheck size={13} />
             </div>
             <NavLink to="/app/profile" className="user-card">

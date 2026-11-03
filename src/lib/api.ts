@@ -157,29 +157,42 @@ async function identity() {
   return { user: member };
 }
 export function resolveAppOrigin() {
-  const configured =
-    (typeof import.meta !== "undefined" && import.meta.env
+  const candidates = [
+    typeof import.meta !== "undefined" && import.meta.env
       ? import.meta.env.VITE_APP_URL ||
         import.meta.env.VITE_PUBLIC_APP_URL ||
         import.meta.env.VITE_SITE_URL ||
-        import.meta.env.VITE_ORIGIN
-      : "") ||
-    (typeof process !== "undefined" && process.env
+        import.meta.env.VITE_ORIGIN ||
+        import.meta.env.SUPABASE_AUTH_REDIRECT_URL
+      : "",
+    typeof process !== "undefined" && process.env
       ? process.env.APP_ORIGIN ||
         process.env.PUBLIC_APP_URL ||
         process.env.SITE_URL ||
         process.env.VITE_APP_URL ||
-        process.env.VITE_PUBLIC_APP_URL
-      : "");
-  if (configured) {
+        process.env.VITE_PUBLIC_APP_URL ||
+        process.env.SUPABASE_AUTH_REDIRECT_URL
+      : "",
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "",
+    "https://smartsell.swahivo.com",
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const value = String(candidate).trim();
+    if (!value) continue;
     try {
-      return new URL(configured).origin;
+      const url = new URL(value);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        return url.origin;
+      }
     } catch {
-      return configured.replace(/\/+$/, "");
+      const normalized = value.replace(/\/+$/, "");
+      if (normalized) return normalized;
     }
   }
-  if (typeof window !== "undefined" && window.location?.origin)
-    return window.location.origin;
+
   return "https://smartsell.swahivo.com";
 }
 
