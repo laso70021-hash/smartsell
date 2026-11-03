@@ -141,12 +141,21 @@ Deno.serve(async (request) => {
     const content = emailContent(event);
     const id = await getMailboxId(token);
     const { email, ...message } = content;
+    const payload: Record<string, unknown> = {
+      to: [email],
+      subject: message.subject,
+    };
+    if (message.text) payload.text = message.text;
+    if (message.html) payload.html = message.html;
+    const fromAddress = Deno.env.get("HOSTINGER_FROM_EMAIL");
+    if (fromAddress) payload.from = fromAddress;
+
     const response = await fetch(
       `https://api.mail.hostinger.com/api/v1/mailboxes/${encodeURIComponent(id)}/send`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ to: [email], displayName: "Smartsell", ...message }),
+        body: JSON.stringify(payload),
       },
     );
     if (!response.ok) throw new Error(`Hostinger email delivery failed with HTTP ${response.status}`);

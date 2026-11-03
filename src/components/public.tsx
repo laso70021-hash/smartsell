@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -298,7 +298,196 @@ export function Auth({
   onUser: (u: User) => void;
 }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [timezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const recoveryLink =
+    searchParams.get("reset") === "1" || searchParams.get("type") === "recovery";
+  const [mode, setMode] = useState<
+    "login" | "register" | "reset" | "new-password"
+  >(() => (recoveryLink ? "new-password" : register ? "register" : "login"));
+
+  useEffect(() => {
+    if (recoveryLink) {
+      setMode("new-password");
+      return;
+    }
+    setMode(register ? "register" : "login");
+  }, [register, recoveryLink]);
+
+  const [info, setInfo] = useState("");
+
+  const renderLogin = () => (
+    <>
+      <Form
+        key={String(register)}
+        submit={register ? "Create workspace" : "Sign in"}
+        onSubmit={async (f) => {
+          const body = Object.fromEntries(f);
+          if (body.category === "Other") {
+            body.custom_category = body.custom_category || body.category_other;
+          }
+          delete body.category_other;
+          const r = await api(
+            "/auth/" + (register ? "register" : "login"),
+            body,
+          );
+          onUser(r.user);
+          navigate("/app");
+        }}
+      >
+        <Fields
+          fields={[
+            ...(register
+              ? [
+                  { name: "name", label: "Your full name" },
+                  { name: "business", label: "Business name" },
+                  {
+                    name: "category",
+                    label: "Business category",
+                    value: "Retail",
+                    options: businessCategories.map((value) => ({
+                      value,
+                      label: value,
+                    })),
+                    otherOption: true,
+                    otherFieldName: "custom_category",
+                  },
+                ]
+              : []),
+            { name: "email", label: "Email address", type: "email" },
+            {
+              name: "password",
+              label: "Password",
+              type: "password",
+              help: register ? "At least 10 characters." : undefined,
+            },
+            ...(register
+              ? [
+                  {
+                    name: "branch",
+                    label: "First branch",
+                    value: "Main branch",
+                  },
+                  {
+                    name: "country",
+                    label: "Country",
+                    value: "Kenya",
+                    options: countryOptions,
+                  },
+                  {
+                    name: "currency",
+                    label: "Business currency",
+                    value: DEFAULT_CURRENCY,
+                    options: currencyOptions,
+                  },
+                  {
+                    name: "timezone",
+                    label: "Business timezone",
+                    value: timezone,
+                  },
+                ]
+              : []),
+          ]}
+        />
+      </Form>
+      {!register && (
+        <p className="auth-switch">
+          <button
+            type="button"
+            className="text-link"
+            onClick={() => {
+              setInfo("");
+              setMode("reset");
+            }}
+          >
+            Forgot password?
+          </button>
+        </p>
+      )}
+    </>
+  );
+
+  const renderReset = () => (
+    <>
+      <Form
+        submit="Send reset link"
+        onSubmit={async (f) => {
+          const body = Object.fromEntries(f);
+          await api("/auth/reset-request", body);
+          setInfo("Check your email for a secure reset link.");
+          setMode("login");
+        }}
+      >
+        <Fields
+          fields={[{ name: "email", label: "Email address", type: "email" }]}
+        />
+      </Form>
+      <p className="auth-switch">
+        <button
+          type="button"
+          className="text-link"
+          onClick={() => {
+            setInfo("");
+            setMode("login");
+          }}
+        >
+          Back to sign in <ArrowUpRight size={14} />
+        </button>
+      </p>
+    </>
+  );
+
+  const renderRecovery = () => (
+    <>
+      <Form
+        submit="Update password"
+        onSubmit={async (f) => {
+          const body = Object.fromEntries(f);
+          if (body.password !== body.confirm) {
+            throw new Error("Passwords do not match.");
+          }
+          await api("/auth/reset-password", body);
+          const me = await api("/auth/me");
+          onUser(me.user);
+          navigate("/app");
+        }}
+      >
+        <Fields
+          fields={[
+            {
+              name: "password",
+              label: "New password",
+              type: "password",
+              help: "Use at least 8 characters.",
+            },
+            { name: "confirm", label: "Confirm new password", type: "password" },
+          ]}
+        />
+      </Form>
+      <p className="auth-switch">
+        <button
+          type="button"
+          className="text-link"
+          onClick={() => {
+            setInfo("");
+            setMode("login");
+          }}
+        >
+          Return to sign in <ArrowUpRight size={14} />
+        </button>
+      </p>
+    </>
+  );
+
+  const activeContent =
+    mode === "register"
+      ? renderLogin()
+      : mode === "reset"
+        ? renderReset()
+        : mode === "new-password"
+          ? renderRecovery()
+          : renderLogin();
+
   return (
     <div className="auth-page">
       <div className="auth-story">
@@ -337,93 +526,50 @@ export function Auth({
         </Link>
         <div className="auth-form">
           <span className="eyebrow">
-            {register ? "A FRESH START" : "GOOD TO SEE YOU"}
+            {mode === "register"
+              ? "A FRESH START"
+              : mode === "reset"
+                ? "PASSWORD HELP"
+                : mode === "new-password"
+                  ? "SECURE YOUR ACCOUNT"
+                  : "GOOD TO SEE YOU"}
           </span>
-          <h2>{register ? "Let’s set up your business." : "Welcome back."}</h2>
+          <h2>
+            {mode === "register"
+              ? "Let’s set up your business."
+              : mode === "reset"
+                ? "Reset your password."
+                : mode === "new-password"
+                  ? "Choose a new password."
+                  : "Welcome back."}
+          </h2>
           <p>
-            {register
+            {mode === "register"
               ? "A few details, and you’re ready to make it yours."
-              : "Sign in to pick up where you left off."}
+              : mode === "reset"
+                ? "Enter the email address for your Smartsell account."
+                : mode === "new-password"
+                  ? "Create a fresh password to continue signing in."
+                  : "Sign in to pick up where you left off."}
           </p>
-          <Form
-            key={String(register)}
-            submit={register ? "Create workspace" : "Sign in"}
-            onSubmit={async (f) => {
-              const body = Object.fromEntries(f);
-              if (body.category === "Other") {
-                body.custom_category = body.custom_category || body.category_other;
-              }
-              delete body.category_other;
-              const r = await api(
-                "/auth/" + (register ? "register" : "login"),
-                body,
-              );
-              onUser(r.user);
-              navigate("/app");
-            }}
-          >
-            <Fields
-              fields={[
-                ...(register
-                  ? [
-                      { name: "name", label: "Your full name" },
-                      { name: "business", label: "Business name" },
-                      {
-                        name: "category",
-                        label: "Business category",
-                        value: "Retail",
-                        options: businessCategories.map((value) => ({
-                          value,
-                          label: value,
-                        })),
-                        otherOption: true,
-                        otherFieldName: "custom_category",
-                      },
-                    ]
-                  : []),
-                { name: "email", label: "Email address", type: "email" },
-                {
-                  name: "password",
-                  label: "Password",
-                  type: "password",
-                  help: register ? "At least 10 characters." : undefined,
-                },
-                ...(register
-                  ? [
-                      {
-                        name: "branch",
-                        label: "First branch",
-                        value: "Main branch",
-                      },
-                      {
-                        name: "country",
-                        label: "Country",
-                        value: "Kenya",
-                        options: countryOptions,
-                      },
-                      {
-                        name: "currency",
-                        label: "Business currency",
-                        value: DEFAULT_CURRENCY,
-                        options: currencyOptions,
-                      },
-                      {
-                        name: "timezone",
-                        label: "Business timezone",
-                        value: timezone,
-                      },
-                    ]
-                  : []),
-              ]}
-            />
-          </Form>
-          <p className="auth-switch">
-            {register ? "Already have an account?" : "New to Smartsell?"}{" "}
-            <Link to={register ? "/login" : "/register"}>
-              {register ? "Sign in" : "Create a workspace"}{" "}
-              <ArrowUpRight size={14} />
-            </Link>
-          </p>
+          {activeContent}
+          {info && <p className="success-message">{info}</p>}
+          {!register && mode === "login" && (
+            <p className="auth-switch">
+              New to Smartsell?{" "}
+              <Link to="/register">
+                Create a workspace <ArrowUpRight size={14} />
+              </Link>
+            </p>
+          )}
+          {register && mode === "register" && (
+            <p className="auth-switch">
+              Already have an account?{" "}
+              <Link to="/login">
+                Sign in <ArrowUpRight size={14} />
+              </Link>
+            </p>
+          )}
         </div>
         <small className="local-note">
           <ShieldCheck size={14} /> Your connected business workspace · no

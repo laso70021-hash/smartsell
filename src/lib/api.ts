@@ -153,6 +153,10 @@ async function identity() {
   }
   return { user: member };
 }
+function authRedirectUrl(path: string) {
+  return new URL(path, window.location.origin).toString();
+}
+
 async function signUp(body: Record<string, any>) {
   const { data, error } = await getSupabase().auth.signUp({
     email: String(body.email || ""),
@@ -168,7 +172,7 @@ async function signUp(body: Record<string, any>) {
         category: body.category || "Retail",
         custom_category: body.custom_category || "",
       } satisfies AuthMetadata,
-      emailRedirectTo: new URL("/login", window.location.origin).toString(),
+      emailRedirectTo: authRedirectUrl("/login"),
     },
   });
   if (error) throw supabaseError(error);
@@ -186,6 +190,16 @@ async function signIn(body: Record<string, any>) {
   if (error) throw supabaseError(error);
   return identity();
 }
+async function requestPasswordReset(body: Record<string, any>) {
+  const email = String(body.email || "").trim();
+  if (!email) throw new Error("Enter your email address.");
+  const { error } = await getSupabase().auth.resetPasswordForEmail(email, {
+    redirectTo: authRedirectUrl("/login?reset=1"),
+  });
+  if (error) throw supabaseError(error);
+  return { ok: true, email };
+}
+
 async function updatePassword(body: Record<string, any>) {
   const client = getSupabase();
   const { data, error } = await client.auth.getUser();
@@ -202,6 +216,17 @@ async function updatePassword(body: Record<string, any>) {
   if (updated.error) throw supabaseError(updated.error);
   return { ok: true };
 }
+
+async function updatePasswordFromRecovery(body: Record<string, any>) {
+  const password = String(body.password || "");
+  if (password.length < 8) {
+    throw new Error("Choose a password with at least 8 characters.");
+  }
+  const { error } = await getSupabase().auth.updateUser({ password });
+  if (error) throw supabaseError(error);
+  return { ok: true };
+}
+
 export async function api<T = any>(
   path: string,
   body?: unknown,
@@ -214,6 +239,10 @@ export async function api<T = any>(
     return (await signUp((body || {}) as Record<string, any>)) as T;
   if (path === "/auth/login" && method === "POST")
     return (await signIn((body || {}) as Record<string, any>)) as T;
+  if (path === "/auth/reset-request" && method === "POST")
+    return (await requestPasswordReset((body || {}) as Record<string, any>)) as T;
+  if (path === "/auth/reset-password" && method === "POST")
+    return (await updatePasswordFromRecovery((body || {}) as Record<string, any>)) as T;
   if (path === "/auth/logout" && method === "POST") {
     const { error } = await client.auth.signOut();
     if (error) throw supabaseError(error);
