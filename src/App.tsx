@@ -59,25 +59,59 @@ const SYSTEM_ADMIN_ID = "0706ee20-d730-4a3e-bfaf-db0547cb3da5";
 const isSystemAdminUser = (user: User) =>
   Boolean(user.is_admin) || user.id === SYSTEM_ADMIN_ID;
 
+function resolveApiBase() {
+  const configured = (
+    import.meta.env.VITE_API_BASE_URL ||
+    import.meta.env.VITE_APP_URL ||
+    import.meta.env.VITE_PUBLIC_APP_URL ||
+    import.meta.env.VITE_SITE_URL ||
+    ""
+  ).replace(/\/$/, "");
+
+  if (configured) return configured;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "";
+}
+
 async function adminRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers || {});
   if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const apiBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-  const response = await fetch(`${apiBase || ""}/api${path}`, {
+
+  const apiBase = resolveApiBase();
+  const endpoint = apiBase ? `${apiBase}/api${path}` : `/api${path}`;
+  const response = await fetch(endpoint, {
     ...init,
     credentials: "include",
     headers,
   });
+
   const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("text/html") || response.redirected) {
+  if ((contentType.includes("text/html") || response.redirected) && !path.startsWith("/admin/overview")) {
+    // This happens when the SPA catch-all is serving index.html instead of the API.
     throw new Error(
-      "The API route is unavailable. Set VITE_API_BASE_URL or fix the Vercel /api rewrite so the app reaches the backend instead of the HTML shell.",
+      "The API route is unavailable. Use the same-origin /api route or configure VITE_API_BASE_URL to the backend URL.",
     );
   }
+
   const payload = await response.text();
-  const json = payload ? JSON.parse(payload) : {};
+  let json: any = {};
+  if (payload) {
+    try {
+      json = JSON.parse(payload);
+    } catch {
+      if (contentType.includes("text/html")) {
+        throw new Error(
+          "The API route is unavailable. Use the same-origin /api route or configure VITE_API_BASE_URL to the backend URL.",
+        );
+      }
+      throw new Error("The server returned an invalid response.");
+    }
+  }
+
   if (!response.ok) {
     throw new Error(json.error || json.message || "Request failed.");
   }
