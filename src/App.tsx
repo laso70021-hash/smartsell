@@ -64,11 +64,18 @@ async function adminRequest<T>(path: string, init: RequestInit = {}): Promise<T>
   if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(`/api${path}`, {
+  const apiBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+  const response = await fetch(`${apiBase || ""}/api${path}`, {
     ...init,
     credentials: "include",
     headers,
   });
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("text/html") || response.redirected) {
+    throw new Error(
+      "The API route is unavailable. Set VITE_API_BASE_URL or fix the Vercel /api rewrite so the app reaches the backend instead of the HTML shell.",
+    );
+  }
   const payload = await response.text();
   const json = payload ? JSON.parse(payload) : {};
   if (!response.ok) {

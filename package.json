@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "concurrently \"node server/index.mjs\" \"vite --host 127.0.0.1\"",
     "build": "tsc -b && vite build",
     "start": "vite preview --host 0.0.0.0",
     "start:legacy-local": "node server/index.mjs",

@@ -46,6 +46,7 @@ const businessCategories = [
 ];
 const uuid = z.uuid();
 const SYSTEM_ADMIN_IDS = new Set(["0706ee20-d730-4a3e-bfaf-db0547cb3da5"]);
+const apiPrefix = "/api";
 const hash = (v) => createHash("sha256").update(v).digest("hex");
 const quantityMilli = (v) => Math.round(v * 1000);
 const quantityAmount = (unitPrice, quantityMilliValue) =>
@@ -64,9 +65,11 @@ const safeUser = ({ password, ...user }) => user;
 export function createApp({
   dbPath = "data/dukapro.db",
   serveStatic = true,
+  apiPrefix = "/api",
 } = {}) {
   const db = openDatabase(dbPath),
-    app = express();
+    app = express(),
+    effectiveApiPrefix = apiPrefix || "/api";
   const get = (sql, ...args) => db.prepare(sql).get(...args),
     all = (sql, ...args) => db.prepare(sql).all(...args),
     run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -189,7 +192,7 @@ export function createApp({
     next();
   });
   app.use(express.json({ limit: "2mb" }));
-  app.use("/api", (req, res, next) => {
+  app.use(effectiveApiPrefix, (req, res, next) => {
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       const origin = req.get("origin");
       const allowedOrigins = [
@@ -245,7 +248,7 @@ export function createApp({
         if (v.until < Date.now()) attempts.delete(k);
     next();
   };
-  app.post("/api/auth/register", rateLimit, (req, res) => {
+  app.post(`${effectiveApiPrefix}/auth/register`, rateLimit, (req, res) => {
     const v = z
       .object({
         name: text,
@@ -315,7 +318,7 @@ export function createApp({
       .status(201)
       .json({ user: safeUser(get("SELECT * FROM users WHERE id=?", id)) });
   });
-  app.post("/api/auth/login", rateLimit, (req, res) => {
+  app.post(`${effectiveApiPrefix}/auth/login`, rateLimit, (req, res) => {
     const v = z
       .object({ email, password: z.string().min(1).max(200) })
       .parse(req.body);
@@ -325,7 +328,7 @@ export function createApp({
     session(res, u.id);
     res.json({ user: safeUser(u) });
   });
-  app.use("/api", (req, res, next) => {
+  app.use(effectiveApiPrefix, (req, res, next) => {
     const raw = req.headers.cookie
       ?.split(";")
       .map((v) => v.trim())
@@ -343,13 +346,13 @@ export function createApp({
     req.user = u;
     next();
   });
-  app.get("/api/auth/me", (req, res) => res.json({ user: safeUser(req.user) }));
-  app.post("/api/auth/logout", (req, res) => {
+  app.get(`${effectiveApiPrefix}/auth/me`, (req, res) => res.json({ user: safeUser(req.user) }));
+  app.post(`${effectiveApiPrefix}/auth/logout`, (req, res) => {
     run("DELETE FROM sessions WHERE user_id=?", req.user.id);
     res.clearCookie("dukapro_session", { path: "/" });
     res.json({ ok: true });
   });
-  app.get("/api/admin/overview", (req, res) => {
+  app.get(`${effectiveApiPrefix}/admin/overview`, (req, res) => {
     if (!isSystemAdmin(req.user))
       fail("Platform admin access required.", 403);
     const businesses = all(
@@ -390,7 +393,7 @@ export function createApp({
       recent,
     });
   });
-  app.get("/api/admin/users", (req, res) => {
+  app.get(`${effectiveApiPrefix}/admin/users`, (req, res) => {
     if (!isSystemAdmin(req.user))
       fail("Platform admin access required.", 403);
     const users = all(
@@ -402,7 +405,7 @@ export function createApp({
     );
     res.json({ users });
   });
-  app.put("/api/admin/users/:id", (req, res) => {
+  app.put(`${effectiveApiPrefix}/admin/users/:id`, (req, res) => {
     if (!isSystemAdmin(req.user))
       fail("Platform admin access required.", 403);
     const v = z
@@ -469,7 +472,7 @@ export function createApp({
     });
     res.json({ ok: true, user: safeUser(get("SELECT * FROM users WHERE id=?", member.id)) });
   });
-  app.post("/api/admin/users/:id/toggle", (req, res) => {
+  app.post(`${effectiveApiPrefix}/admin/users/:id/toggle`, (req, res) => {
     if (!isSystemAdmin(req.user))
       fail("Platform admin access required.", 403);
     const member = get("SELECT * FROM users WHERE id=?", req.params.id);
@@ -494,7 +497,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/admin/users/:id/switch", (req, res) => {
+  app.post(`${effectiveApiPrefix}/admin/users/:id/switch`, (req, res) => {
     if (!isSystemAdmin(req.user))
       fail("Platform admin access required.", 403);
     const member = get("SELECT * FROM users WHERE id=?", req.params.id);
@@ -507,7 +510,7 @@ export function createApp({
     session(res, member.id);
     res.json({ ok: true, user: safeUser(member) });
   });
-  app.delete("/api/admin/users/:id", (req, res) => {
+  app.delete(`${effectiveApiPrefix}/admin/users/:id`, (req, res) => {
     if (!isSystemAdmin(req.user))
       fail("Platform admin access required.", 403);
     const member = get("SELECT * FROM users WHERE id=?", req.params.id);
@@ -526,7 +529,7 @@ export function createApp({
     });
     res.json({ ok: true, deleted: member.email });
   });
-  app.get("/api/workspace", (req, res) => {
+  app.get(`${effectiveApiPrefix}/workspace`, (req, res) => {
     const u = req.user,
       b = String(req.query.branch || u.branch_id);
     branch(u, b);
@@ -622,7 +625,7 @@ export function createApp({
           ),
     });
   });
-      app.get("/api/cashier-shifts", (req, res) => {
+      app.get(`${effectiveApiPrefix}/cashier-shifts`, (req, res) => {
         const u = req.user;
         if (req.query.scope === "active") {
           if (u.role !== "cashier") return res.json({ shift: null });
@@ -649,7 +652,7 @@ export function createApp({
         ).map((shift) => ({ ...shift, report: JSON.parse(shift.report || "{}") }));
         res.json({ shifts });
       });
-      app.post("/api/cashier-shifts", (req, res) => {
+      app.post(`${effectiveApiPrefix}/cashier-shifts`, (req, res) => {
         const u = req.user;
         const body = z.object({
           action: z.enum(["open", "close"]),
@@ -767,7 +770,7 @@ export function createApp({
     price: amount,
     threshold: z.number().min(0).max(100000).refine(validQuantity),
   });
-  app.post("/api/products/import", (req, res) => {
+  app.post(`${effectiveApiPrefix}/products/import`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -814,7 +817,7 @@ export function createApp({
     });
     res.status(201).json({ count: v.products.length });
   });
-  app.post("/api/products", (req, res) => {
+  app.post(`${effectiveApiPrefix}/products`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = productSchema
@@ -853,7 +856,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.put("/api/products/:id", (req, res) => {
+  app.put(`${effectiveApiPrefix}/products/:id`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = productSchema.parse(req.body);
@@ -884,7 +887,7 @@ export function createApp({
     price: amount,
     threshold: z.number().min(0).max(100000).refine(validQuantity),
   });
-  app.post("/api/products/:id/variants", (req, res) => {
+  app.post(`${effectiveApiPrefix}/products/:id/variants`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const p = owned("products", req.params.id, u);
@@ -916,7 +919,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.put("/api/products/:id/variants/:variantId", (req, res) => {
+  app.put(`${effectiveApiPrefix}/products/:id/variants/:variantId`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const p = owned("products", req.params.id, u);
@@ -948,7 +951,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/products/:id/variants/:variantId/archive", (req, res) => {
+  app.post(`${effectiveApiPrefix}/products/:id/variants/:variantId/archive`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const p = owned("products", req.params.id, u);
@@ -966,7 +969,7 @@ export function createApp({
     event(u, null, "Products", `${p.name} · ${variant.name}`, "Variant archived", variant.sku);
     res.json({ ok: true });
   });
-  app.post("/api/stock", (req, res) => {
+  app.post(`${effectiveApiPrefix}/stock`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1008,7 +1011,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/parties", (req, res) => {
+  app.post(`${effectiveApiPrefix}/parties`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1043,7 +1046,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.post("/api/sales", (req, res) => {
+  app.post(`${effectiveApiPrefix}/sales`, (req, res) => {
     const u = req.user;
     const v = z
       .object({
@@ -1204,7 +1207,7 @@ export function createApp({
     });
     res.status(201).json(result);
   });
-  app.post("/api/sales/:id/refund", (req, res) => {
+  app.post(`${effectiveApiPrefix}/sales/:id/refund`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const sale = owned("sales", req.params.id, u);
@@ -1235,7 +1238,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/purchases", (req, res) => {
+  app.post(`${effectiveApiPrefix}/purchases`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1293,7 +1296,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.post("/api/purchases/:id/receive", (req, res) => {
+  app.post(`${effectiveApiPrefix}/purchases/:id/receive`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const p = owned("purchases", req.params.id, u);
@@ -1323,7 +1326,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/payments", (req, res) => {
+  app.post(`${effectiveApiPrefix}/payments`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1356,7 +1359,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/expenses", (req, res) => {
+  app.post(`${effectiveApiPrefix}/expenses`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1386,7 +1389,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.get("/api/restaurant", (req, res) => {
+  app.get(`${effectiveApiPrefix}/restaurant`, (req, res) => {
     const u = req.user,
       branchId = String(req.query.branch || u.branch_id);
     role(u, ["owner", "manager"]);
@@ -1414,7 +1417,7 @@ export function createApp({
     }));
     res.json({ tables, stations, orders });
   });
-  app.post("/api/restaurant/tables", (req, res) => {
+  app.post(`${effectiveApiPrefix}/restaurant/tables`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1439,7 +1442,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.post("/api/restaurant/stations", (req, res) => {
+  app.post(`${effectiveApiPrefix}/restaurant/stations`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1459,7 +1462,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.post("/api/restaurant/orders", (req, res) => {
+  app.post(`${effectiveApiPrefix}/restaurant/orders`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1561,7 +1564,7 @@ export function createApp({
     });
     res.status(201).json({ id, reference });
   });
-  app.post("/api/restaurant/orders/:id/submit", (req, res) => {
+  app.post(`${effectiveApiPrefix}/restaurant/orders/:id/submit`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const order = get(
@@ -1602,7 +1605,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/restaurant/orders/:id/items/:itemId/status", (req, res) => {
+  app.post(`${effectiveApiPrefix}/restaurant/orders/:id/items/:itemId/status`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1655,7 +1658,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/restaurant/orders/:id/close", (req, res) => {
+  app.post(`${effectiveApiPrefix}/restaurant/orders/:id/close`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const order = get(
@@ -1682,7 +1685,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/restaurant/orders/:id/cancel", (req, res) => {
+  app.post(`${effectiveApiPrefix}/restaurant/orders/:id/cancel`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const order = get(
@@ -1713,7 +1716,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/branches", (req, res) => {
+  app.post(`${effectiveApiPrefix}/branches`, (req, res) => {
     const u = req.user;
     role(u, ["owner"]);
     const v = z
@@ -1733,7 +1736,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.put("/api/branches/:id", (req, res) => {
+  app.put(`${effectiveApiPrefix}/branches/:id`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -1758,7 +1761,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.post("/api/staff", (req, res) => {
+  app.post(`${effectiveApiPrefix}/staff`, (req, res) => {
     const u = req.user;
     if (!canManageStaff(u))
       fail("Your role does not permit this action.", 403);
@@ -1796,7 +1799,7 @@ export function createApp({
     });
     res.status(201).json({ id });
   });
-  app.put("/api/staff/:id", (req, res) => {
+  app.put(`${effectiveApiPrefix}/staff/:id`, (req, res) => {
     const u = req.user;
     if (!canManageStaff(u))
       fail("Your role does not permit this action.", 403);
@@ -1838,7 +1841,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.delete("/api/staff/:id", (req, res) => {
+  app.delete(`${effectiveApiPrefix}/staff/:id`, (req, res) => {
     const u = req.user;
     if (!canManageStaff(u))
       fail("Your role does not permit this action.", 403);
@@ -1859,7 +1862,7 @@ export function createApp({
     });
     res.json({ ok: true, deleted: member.email });
   });
-  app.post("/api/staff/:id/toggle", (req, res) => {
+  app.post(`${effectiveApiPrefix}/staff/:id/toggle`, (req, res) => {
     const u = req.user;
     if (!canManageStaff(u))
       fail("Your role does not permit this action.", 403);
@@ -1888,7 +1891,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.put("/api/business", (req, res) => {
+  app.put(`${effectiveApiPrefix}/business`, (req, res) => {
     const u = req.user;
     role(u, ["owner"]);
     const v = z
@@ -1938,7 +1941,7 @@ export function createApp({
     });
     res.json({ ok: true });
   });
-  app.put("/api/profile", (req, res) => {
+  app.put(`${effectiveApiPrefix}/profile`, (req, res) => {
     const v = z
       .object({ name: text, theme: z.enum(["dark", "light"]) })
       .parse(req.body);
@@ -1950,7 +1953,7 @@ export function createApp({
     );
     res.json({ ok: true });
   });
-  app.post("/api/password", (req, res) => {
+  app.post(`${effectiveApiPrefix}/password`, (req, res) => {
     const v = z
       .object({
         current: z.string().max(200),
@@ -1970,7 +1973,7 @@ export function createApp({
     session(res, req.user.id);
     res.json({ ok: true });
   });
-  app.post("/api/exports", (req, res) => {
+  app.post(`${effectiveApiPrefix}/exports`, (req, res) => {
     const u = req.user;
     role(u, ["owner", "manager"]);
     const v = z
@@ -2032,9 +2035,9 @@ export function createApp({
       content,
       now(),
     );
-    res.status(201).json({ id, name, url: "/api/exports/" + id });
+    res.status(201).json({ id, name, url: `${effectiveApiPrefix}/exports/` + id });
   });
-  app.get("/api/exports/:id", (req, res) => {
+  app.get(`${effectiveApiPrefix}/exports/:id`, (req, res) => {
     role(req.user, ["owner", "manager"]);
     const e = owned("exports", req.params.id, req.user);
     branch(req.user, e.branch_id);
@@ -2048,11 +2051,11 @@ export function createApp({
   if (serveStatic) {
     app.use(express.static("dist"));
     app.get("/{*path}", (req, res, next) => {
-      if (req.path.startsWith("/api")) return next();
+      if (req.path.startsWith(`${effectiveApiPrefix}`)) return next();
       res.sendFile("index.html", { root: "dist" });
     });
   }
-  app.use("/api", (req, res) =>
+  app.use(`${effectiveApiPrefix}`, (req, res) =>
     res.status(404).json({ error: "Endpoint not found." }),
   );
   app.use((err, req, res, next) => {
