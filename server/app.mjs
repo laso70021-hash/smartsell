@@ -108,6 +108,7 @@ export function createApp({
     return record;
   };
   const isSystemAdmin = (u) => Boolean(u?.is_admin) || SYSTEM_ADMIN_IDS.has(u?.id);
+  const requiresPasswordChange = (u) => Number(u?.must_change_password ?? 0) === 1;
   const isOwnerOrAdmin = (u) => u.role === "owner" || isSystemAdmin(u);
   const canManageStaff = (u) => u.role === "owner" || isSystemAdmin(u);
   const role = (u, roles) => {
@@ -443,12 +444,12 @@ export function createApp({
     const nextRole = v.role || member.role;
     tx(() => {
       run(
-        "UPDATE users SET name=COALESCE(?, name), email=COALESCE(?, email), role=COALESCE(?, role), business_id=COALESCE(?, business_id), branch_id=COALESCE(?, branch_id), active=?, account_status=?, expires_at=?, is_admin=?, password=? WHERE id=?",
+        "UPDATE users SET name=COALESCE(?, name), email=COALESCE(?, email), business_id=COALESCE(?, business_id), branch_id=COALESCE(?, branch_id), role=COALESCE(?, role), active=?, account_status=?, expires_at=?, is_admin=?, password=? WHERE id=?",
         v.name || null,
         v.email || null,
-        v.role || null,
         v.business_id || null,
         v.branch_id || null,
+        v.role || null,
         nextActive ? 1 : 0,
         nextStatus,
         nextExpires,
@@ -492,6 +493,19 @@ export function createApp({
       );
     });
     res.json({ ok: true });
+  });
+  app.post("/api/admin/users/:id/switch", (req, res) => {
+    if (!isSystemAdmin(req.user))
+      fail("Platform admin access required.", 403);
+    const member = get("SELECT * FROM users WHERE id=?", req.params.id);
+    if (!member) fail("User not found.", 404);
+    if (!isAccountActive(member))
+      fail("This user is not active. Activate the account before switching into it.", 403);
+    tx(() => {
+      run("DELETE FROM sessions WHERE user_id=?", req.user.id);
+    });
+    session(res, member.id);
+    res.json({ ok: true, user: safeUser(member) });
   });
   app.delete("/api/admin/users/:id", (req, res) => {
     if (!isSystemAdmin(req.user))

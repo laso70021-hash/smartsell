@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 const isAccountActive = (user) => {
   if (!user) return false;
   if (Number(user.active ?? 0) !== 1) return false;
+  if (Number(user.must_change_password ?? 0) === 1) return false;
   const accountStatus = user.account_status || "active";
   if (accountStatus !== "active") return false;
   if (user.expires_at && new Date(user.expires_at).getTime() <= Date.now())
@@ -18,7 +19,7 @@ export function openDatabase(path) {
   db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
   CREATE TABLE IF NOT EXISTS businesses(id TEXT PRIMARY KEY,name TEXT NOT NULL,currency TEXT NOT NULL DEFAULT 'TZS',country TEXT NOT NULL,timezone TEXT NOT NULL,email TEXT DEFAULT '',phone TEXT DEFAULT '',address TEXT DEFAULT '',tax_id TEXT DEFAULT '',category TEXT NOT NULL DEFAULT 'Retail',custom_category TEXT DEFAULT '');
   CREATE TABLE IF NOT EXISTS branches(id TEXT PRIMARY KEY,business_id TEXT NOT NULL REFERENCES businesses(id),name TEXT NOT NULL,address TEXT DEFAULT '',phone TEXT DEFAULT '',active INTEGER DEFAULT 1,is_default INTEGER NOT NULL DEFAULT 0);
-  CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,business_id TEXT NOT NULL REFERENCES businesses(id),branch_id TEXT NOT NULL REFERENCES branches(id),name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,password TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('owner','manager','cashier')),active INTEGER DEFAULT 1,account_status TEXT NOT NULL DEFAULT 'active' CHECK(account_status IN ('active','suspended','pending')),expires_at TEXT,is_admin INTEGER NOT NULL DEFAULT 0,theme TEXT DEFAULT 'dark');
+  CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,business_id TEXT NOT NULL REFERENCES businesses(id),branch_id TEXT NOT NULL REFERENCES branches(id),name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,password TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('owner','manager','cashier')),active INTEGER DEFAULT 1,account_status TEXT NOT NULL DEFAULT 'active' CHECK(account_status IN ('active','suspended','pending')),expires_at TEXT,is_admin INTEGER NOT NULL DEFAULT 0,must_change_password INTEGER NOT NULL DEFAULT 0,theme TEXT DEFAULT 'dark');
   CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS cashier_shifts(id TEXT PRIMARY KEY,business_id TEXT NOT NULL REFERENCES businesses(id),branch_id TEXT NOT NULL REFERENCES branches(id),cashier_id TEXT NOT NULL REFERENCES users(id),opened_at TEXT NOT NULL,opening_cash INTEGER NOT NULL CHECK(opening_cash>=0),closed_at TEXT,expected_cash INTEGER,counted_cash INTEGER,variance INTEGER,sales_count INTEGER,sales_total INTEGER,report TEXT);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_cashier_one_open_shift ON cashier_shifts(cashier_id) WHERE closed_at IS NULL;
@@ -60,6 +61,7 @@ export function openDatabase(path) {
   ensureColumn("users", "account_status", "TEXT NOT NULL DEFAULT 'active' CHECK(account_status IN ('active','suspended','pending'))");
   ensureColumn("users", "expires_at", "TEXT");
   ensureColumn("users", "is_admin", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("users", "must_change_password", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("stock", "quantity_milli", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("sale_items", "quantity_milli", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("sale_items", "variant_id", "TEXT");

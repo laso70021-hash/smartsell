@@ -207,6 +207,18 @@ function AdminConsole({
     }
   };
 
+  const switchToUser = async (targetId: string) => {
+    try {
+      const result = await adminRequest<{ ok: boolean; user?: User }>(`/admin/users/${targetId}/switch`, {
+        method: "POST",
+      });
+      setStatus(result.ok ? "Switched to this user session." : "Session switched.");
+      window.location.assign("/app");
+    } catch (e) {
+      setStatus((e as Error).message);
+    }
+  };
+
   const data = overview ?? {
     stats: { businesses: 0, users: 0, active: 0, suspended: 0 },
     users: [],
@@ -352,6 +364,9 @@ function AdminConsole({
                                 <div className="row-actions">
                                   <Button size="sm" variant="secondary" onClick={() => updateUser(member.id, { account_status: nextStatus === "active" ? "suspended" : "active", active: nextStatus !== "active" })}>Toggle</Button>
                                   <Button size="sm" variant="secondary" onClick={() => updateUser(member.id, { is_admin: !platformAdmin })}>{platformAdmin ? "Remove admin" : "Grant admin"}</Button>
+                                  {!platformAdmin && member.id !== user.id && (
+                                    <Button size="sm" variant="default" onClick={() => void switchToUser(member.id)}>Use as normal user</Button>
+                                  )}
                                 </div>
                               </td>
                             </tr>
