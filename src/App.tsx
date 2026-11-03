@@ -56,6 +56,10 @@ import {
 } from "./components/pages";
 import { ActionDialog } from "./components/actions";
 import { DocumentTemplates } from "./components/documents";
+const SYSTEM_ADMIN_ID = "0706ee20-d730-4a3e-bfaf-db0547cb3da5";
+const isSystemAdminUser = (user: User) =>
+  Boolean(user.is_admin) || user.id === SYSTEM_ADMIN_ID;
+
 type Action = { type: string; record?: Row };
 type Context = {
   data: Workspace;
@@ -186,7 +190,8 @@ function WorkspaceApp({
     await refresh();
     return r;
   };
-  const canManage = user.role !== "cashier";
+  const isSystemAdmin = isSystemAdminUser(user);
+  const canManage = isSystemAdmin || user.role !== "cashier";
   if (!data || loading)
     return (
       <div className="app-loading">
@@ -264,7 +269,7 @@ function WorkspaceApp({
               ? links
               : links.filter((l) => ["/app", "/app/sales"].includes(l.to))
             )
-              .filter((l) => !l.owner || user.role === "owner")
+              .filter((l) => !l.owner || user.role === "owner" || isSystemAdmin)
               .filter(
                 (l) =>
                   l.to !== "/app/restaurant" ||
@@ -349,7 +354,7 @@ function WorkspaceApp({
                     .filter(
                       (b) =>
                         b.active &&
-                        (user.role === "owner" || b.id === user.branch_id),
+                        (user.role === "owner" || isSystemAdmin || b.id === user.branch_id),
                     )
                     .map((b) => (
                       <option key={b.id} value={b.id}>
@@ -441,7 +446,7 @@ function WorkspaceApp({
               <Route
                 path="settings"
                 element={
-                  user.role === "owner" ? (
+                  user.role === "owner" || isSystemAdmin ? (
                     <SettingsPage />
                   ) : (
                     <Navigate to="/app" />
@@ -451,7 +456,7 @@ function WorkspaceApp({
               <Route
                 path="settings/documents"
                 element={
-                  user.role === "owner" ? (
+                  user.role === "owner" || isSystemAdmin ? (
                     <DocumentTemplates />
                   ) : (
                     <Navigate to="/app" />

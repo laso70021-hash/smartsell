@@ -1198,6 +1198,13 @@ export function Records({ kind }: { kind: string }) {
                               ? "Restore access"
                               : "Suspend access"}
                           </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => act("staff-delete", r)}
+                          >
+                            Delete member
+                          </Button>
                         </div>
                       ),
                   },

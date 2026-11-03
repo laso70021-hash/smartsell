@@ -1105,6 +1105,13 @@ export function ActionDialog({
     handler = async () => {
       await write(`/staff/${r?.id}/toggle`, {});
     };
+  } else if (type === "staff-delete") {
+    title = "Delete team member?";
+    description = `${r?.name} · ${r?.email}`;
+    submit = "Delete member";
+    handler = async () => {
+      await write(`/staff/${r?.id}`, {}, "DELETE");
+    };
   }
   return (
     <Modal title={title} description={description} onClose={onClose}>
@@ -1119,7 +1126,9 @@ export function ActionDialog({
                 ? "Sale refunded and stock returned. Record the cash refund with your customer."
                 : type === "staff"
                   ? "Invitation email sent. Your teammate can accept it and set their own password."
-                : "Saved successfully.",
+                  : type === "staff-delete"
+                    ? "Team member removed and the dashboard has been refreshed."
+                    : "Saved successfully.",
           );
           onClose();
         }}
@@ -1168,6 +1177,16 @@ export function ActionDialog({
               ? "All sessions for this account will be revoked immediately."
               : "This team member will be able to sign in again."}
           </p>
+        )}
+        {type === "staff-delete" && (
+          <div className="warning-strip">
+            <TriangleAlert size={18} />
+            <p>
+              This permanently removes the user record from the business dashboard
+              and closes their active sessions. The team list will refresh after
+              the deletion completes.
+            </p>
+          </div>
         )}
         {type === "purchase" &&
           (!data.products.length ||

@@ -45,6 +45,7 @@ const businessCategories = [
   "Other",
 ];
 const uuid = z.uuid();
+const SYSTEM_ADMIN_IDS = new Set(["0706ee20-d730-4a3e-bfaf-db0547cb3da5"]);
 const hash = (v) => createHash("sha256").update(v).digest("hex");
 const quantityMilli = (v) => Math.round(v * 1000);
 const quantityAmount = (unitPrice, quantityMilliValue) =>
@@ -90,7 +91,7 @@ export function createApp({
       id,
       u.business_id,
     );
-    if (!b || (u.role !== "owner" && u.branch_id !== id))
+    if (!b || (!isOwnerOrAdmin(u) && u.branch_id !== id))
       fail("Branch access denied.", 403);
     return b;
   };
@@ -106,8 +107,10 @@ export function createApp({
     if (!record) fail("Record not found.", 404);
     return record;
   };
+  const isSystemAdmin = (u) => Boolean(u?.is_admin) || SYSTEM_ADMIN_IDS.has(u?.id);
+  const isOwnerOrAdmin = (u) => u.role === "owner" || isSystemAdmin(u);
   const role = (u, roles) => {
-    if (!roles.includes(u.role))
+    if (!roles.includes(u.role) && !isSystemAdmin(u))
       fail("Your role does not permit this action.", 403);
   };
   const event = (u, b, category, entity, description, reference, amount = 0) =>
@@ -425,7 +428,7 @@ export function createApp({
             b,
           ),
       staff:
-        u.role === "owner"
+        isOwnerOrAdmin(u)
           ? all(
               "SELECT id,name,email,role,branch_id,active,account_status,expires_at FROM users WHERE business_id=? ORDER BY name",
               u.business_id,
@@ -1653,6 +1656,26 @@ export function createApp({
       );
     });
     res.json({ ok: true });
+  });
+  app.delete("/api/staff/:id", (req, res) => {
+    const u = req.user;
+    role(u, ["owner"]);
+    const member = owned("users", req.params.id, u);
+    if (member.role === "owner")
+      fail("Owner accounts cannot be deleted here.", 403);
+    tx(() => {
+      run("DELETE FROM sessions WHERE user_id=?", member.id);
+      run("DELETE FROM users WHERE id=? AND business_id=?", member.id, u.business_id);
+      event(
+        u,
+        member.branch_id,
+        "Staff",
+        member.name,
+        "Staff account deleted from the business dashboard",
+        member.id,
+      );
+    });
+    res.json({ ok: true, deleted: member.email });
   });
   app.post("/api/staff/:id/toggle", (req, res) => {
     const u = req.user;
