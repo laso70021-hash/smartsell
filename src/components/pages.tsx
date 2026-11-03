@@ -882,12 +882,18 @@ export function Records({ kind }: { kind: string }) {
   const [title, desc, cta] = labels[kind];
   const [filter, setFilter] = useState("all");
   const party = kind === "customers" || kind === "suppliers";
-  let rows: Row[] = party
-    ? data.parties.filter(
-        (p) => p.kind === (kind === "customers" ? "customer" : "supplier"),
-      )
-    : (data as any)[kind] || [];
-  if (filter !== "all") rows = rows.filter((r) => r.status === filter);
+  const isSystemAdmin =
+    Boolean(data.user.is_admin) ||
+    data.user.id === "0706ee20-d730-4a3e-bfaf-db0547cb3da5";
+  const canManageTeam = data.user.role === "owner" || isSystemAdmin;
+  let rows: Row[] = kind === "downloads"
+    ? data.exports
+    : party
+      ? data.parties.filter(
+          (p) => p.kind === (kind === "customers" ? "customer" : "supplier"),
+        )
+      : (data as any)[kind] || [];
+  if (kind !== "downloads" && filter !== "all") rows = rows.filter((r) => r.status === filter);
   const cols: Column[] = party
     ? [
         {
@@ -1071,53 +1077,87 @@ export function Records({ kind }: { kind: string }) {
                 render: (r) => money(r.amount),
               },
             ]
-          : kind === "branches"
+          : kind === "downloads"
             ? [
                 {
                   key: "name",
-                  label: "Branch",
+                  label: "File",
                   render: (r) => (
                     <div className="product-cell">
                       <span className="square-icon">
-                        <Store size={19} />
+                        <Download size={18} />
                       </span>
                       <div>
                         <strong>{r.name}</strong>
-                        {r.is_default ? <small><Badge tone="violet">Main branch</Badge></small> : null}
+                        <small>{r.scope}</small>
                       </div>
                     </div>
                   ),
                 },
                 {
-                  key: "address",
-                  label: "Location",
-                  render: (r) => r.address || "—",
-                },
-                { key: "phone", label: "Phone", render: (r) => r.phone || "—" },
-                {
-                  key: "active",
-                  label: "Status",
-                  render: (r) => (
-                    <Badge tone={r.active ? "mint" : "neutral"}>
-                      {r.active ? "Active" : "Archived"}
-                    </Badge>
-                  ),
+                  key: "created_at",
+                  label: "Created",
+                  render: (r) => <Time value={r.created_at} />,
                 },
                 {
                   key: "actions",
-                  label: "Manage",
+                  label: "Download",
                   render: (r) => (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => act("branch", r)}
-                    >
-                      Edit details
+                    <Button asChild size="sm" variant="secondary">
+                      <a href={window.location.origin + "/api/exports/" + r.id} download>
+                        Download
+                      </a>
                     </Button>
                   ),
                 },
               ]
-            : kind === "staff"
+            : kind === "branches"
+              ? [
+                  {
+                    key: "name",
+                    label: "Branch",
+                    render: (r) => (
+                      <div className="product-cell">
+                        <span className="square-icon">
+                          <Store size={19} />
+                        </span>
+                        <div>
+                          <strong>{r.name}</strong>
+                          {r.is_default ? <small><Badge tone="violet">Main branch</Badge></small> : null}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "address",
+                    label: "Location",
+                    render: (r) => r.address || "—",
+                  },
+                  { key: "phone", label: "Phone", render: (r) => r.phone || "—" },
+                  {
+                    key: "active",
+                    label: "Status",
+                    render: (r) => (
+                      <Badge tone={r.active ? "mint" : "neutral"}>
+                        {r.active ? "Active" : "Archived"}
+                      </Badge>
+                    ),
+                  },
+                  {
+                    key: "actions",
+                    label: "Manage",
+                    render: (r) => (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => act("branch", r)}
+                      >
+                        Edit details
+                      </Button>
+                    ),
+                  },
+                ]
+              : kind === "staff"
               ? [
                   { key: "name", label: "Team member" },
                   { key: "email", label: "Email" },
@@ -1180,33 +1220,37 @@ export function Records({ kind }: { kind: string }) {
                     key: "actions",
                     label: "Manage",
                     render: (r) =>
-                      r.role !== "owner" && !r.invited && (
+                      canManageTeam && r.role !== "owner" ? (
                         <div className="row wrap">
                           <Button
                             variant="secondary"
                             size="sm"
                             onClick={() => act("staff-edit", r)}
                           >
-                            Edit details / role
+                            {r.invited ? "Edit invite" : "Edit details / role"}
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => act("staff-toggle", r)}
-                          >
-                            {(r.account_status || (r.active ? "active" : "suspended")) === "suspended"
-                              ? "Restore access"
-                              : "Suspend access"}
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => act("staff-delete", r)}
-                          >
-                            Delete member
-                          </Button>
+                          {!r.invited && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => act("staff-toggle", r)}
+                              >
+                                {(r.account_status || (r.active ? "active" : "suspended")) === "suspended"
+                                  ? "Restore access"
+                                  : "Suspend access"}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => act("staff-delete", r)}
+                              >
+                                Delete member
+                              </Button>
+                            </>
+                          )}
                         </div>
-                      ),
+                      ) : null,
                   },
                 ]
               : [
@@ -1255,7 +1299,7 @@ export function Records({ kind }: { kind: string }) {
     kind === "sales" ||
     (canManage &&
       ((kind !== "staff" && kind !== "branches") ||
-        data.user.role === "owner"));
+        canManageTeam));
   return (
     <>
       <PageTitle

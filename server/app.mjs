@@ -109,6 +109,7 @@ export function createApp({
   };
   const isSystemAdmin = (u) => Boolean(u?.is_admin) || SYSTEM_ADMIN_IDS.has(u?.id);
   const isOwnerOrAdmin = (u) => u.role === "owner" || isSystemAdmin(u);
+  const canManageStaff = (u) => u.role === "owner" || isSystemAdmin(u);
   const role = (u, roles) => {
     if (!roles.includes(u.role) && !isSystemAdmin(u))
       fail("Your role does not permit this action.", 403);
@@ -346,6 +347,170 @@ export function createApp({
     run("DELETE FROM sessions WHERE user_id=?", req.user.id);
     res.clearCookie("dukapro_session", { path: "/" });
     res.json({ ok: true });
+  });
+  app.get("/api/admin/overview", (req, res) => {
+    if (!isSystemAdmin(req.user))
+      fail("Platform admin access required.", 403);
+    const businesses = all(
+      `SELECT b.*, COUNT(u.id) AS member_count,
+              SUM(CASE WHEN u.active=1 AND (u.account_status IS NULL OR u.account_status='active') THEN 1 ELSE 0 END) AS active_members,
+              SUM(CASE WHEN u.is_admin=1 OR u.id=? THEN 1 ELSE 0 END) AS owner_count
+       FROM businesses b
+       LEFT JOIN users u ON u.business_id=b.id
+       GROUP BY b.id
+       ORDER BY b.name`,
+      SYSTEM_ADMIN_IDS.has(req.user.id) ? req.user.id : "",
+    );
+    const users = all(
+      `SELECT u.*, b.name AS business_name, br.name AS branch_name
+       FROM users u
+       JOIN businesses b ON b.id=u.business_id
+       JOIN branches br ON br.id=u.branch_id AND br.business_id=u.business_id
+       ORDER BY u.name`,
+    );
+    const activeCount = users.filter((u) => isAccountActive(u)).length;
+    const suspendedCount = users.filter((u) => (u.account_status || "active") === "suspended").length;
+    const recent = all(
+      `SELECT e.*, u.name AS actor_name, b.name AS business_name
+       FROM events e
+       JOIN users u ON u.id=e.actor_id
+       JOIN businesses b ON b.id=e.business_id
+       ORDER BY e.created_at DESC LIMIT 20`,
+    );
+    res.json({
+      stats: {
+        businesses: businesses.length,
+        users: users.length,
+        active: activeCount,
+        suspended: suspendedCount,
+      },
+      businesses,
+      users,
+      recent,
+    });
+  });
+  app.get("/api/admin/users", (req, res) => {
+    if (!isSystemAdmin(req.user))
+      fail("Platform admin access required.", 403);
+    const users = all(
+      `SELECT u.*, b.name AS business_name, br.name AS branch_name
+       FROM users u
+       JOIN businesses b ON b.id=u.business_id
+       JOIN branches br ON br.id=u.branch_id AND br.business_id=u.business_id
+       ORDER BY u.name`,
+    );
+    res.json({ users });
+  });
+  app.put("/api/admin/users/:id", (req, res) => {
+    if (!isSystemAdmin(req.user))
+      fail("Platform admin access required.", 403);
+    const v = z
+      .object({
+        name: text.optional(),
+        email: email.optional(),
+        role: z.enum(["owner", "manager", "cashier"]).optional(),
+        business_id: uuid.optional(),
+        branch_id: uuid.optional(),
+        account_status: z.enum(["active", "suspended", "pending"]).optional(),
+        expires_at: z.string().optional(),
+        active: z.boolean().optional(),
+        is_admin: z.boolean().optional(),
+        password: z.string().min(10).max(200).optional(),
+      })
+      .parse(req.body);
+    const member = get("SELECT * FROM users WHERE id=?", req.params.id);
+    if (!member) fail("User not found.", 404);
+    if (v.business_id) {
+      const business = get("SELECT id FROM businesses WHERE id=?", v.business_id);
+      if (!business) fail("Business not found.", 404);
+    }
+    if (v.branch_id) {
+      const branchRow = get(
+        "SELECT id FROM branches WHERE id=? AND business_id=?",
+        v.branch_id,
+        v.business_id || member.business_id,
+      );
+      if (!branchRow) fail("Branch not found.", 404);
+    }
+    const nextBusinessId = v.business_id || member.business_id;
+    const nextBranchId = v.branch_id || member.branch_id;
+    const nextStatus = v.account_status || member.account_status || "active";
+    const nextActive = v.active ?? Number(member.active ?? 0) === 1;
+    const nextExpires =
+      v.expires_at === undefined ? member.expires_at : v.expires_at && v.expires_at.trim() ? v.expires_at : null;
+    const nextPassword = v.password ? passwordHash(v.password) : member.password;
+    const nextIsAdmin = v.is_admin === undefined ? Number(member.is_admin ?? 0) === 1 : v.is_admin ? 1 : 0;
+    const nextRole = v.role || member.role;
+    tx(() => {
+      run(
+        "UPDATE users SET name=COALESCE(?, name), email=COALESCE(?, email), role=COALESCE(?, role), business_id=COALESCE(?, business_id), branch_id=COALESCE(?, branch_id), active=?, account_status=?, expires_at=?, is_admin=?, password=? WHERE id=?",
+        v.name || null,
+        v.email || null,
+        v.role || null,
+        v.business_id || null,
+        v.branch_id || null,
+        nextActive ? 1 : 0,
+        nextStatus,
+        nextExpires,
+        nextIsAdmin,
+        nextPassword,
+        member.id,
+      );
+      run("DELETE FROM sessions WHERE user_id=?", member.id);
+      event(
+        req.user,
+        nextBranchId,
+        "Platform",
+        member.name,
+        `User updated by platform admin; account status ${nextStatus}`,
+        member.id,
+      );
+    });
+    res.json({ ok: true, user: safeUser(get("SELECT * FROM users WHERE id=?", member.id)) });
+  });
+  app.post("/api/admin/users/:id/toggle", (req, res) => {
+    if (!isSystemAdmin(req.user))
+      fail("Platform admin access required.", 403);
+    const member = get("SELECT * FROM users WHERE id=?", req.params.id);
+    if (!member) fail("User not found.", 404);
+    const nextStatus = member.account_status === "active" ? "suspended" : "active";
+    tx(() => {
+      run(
+        "UPDATE users SET active=?, account_status=? WHERE id=?",
+        nextStatus === "active" ? 1 : 0,
+        nextStatus,
+        member.id,
+      );
+      run("DELETE FROM sessions WHERE user_id=?", member.id);
+      event(
+        req.user,
+        member.branch_id,
+        "Platform",
+        member.name,
+        nextStatus === "active" ? "User re-enabled by platform admin" : "User suspended by platform admin",
+        member.id,
+      );
+    });
+    res.json({ ok: true });
+  });
+  app.delete("/api/admin/users/:id", (req, res) => {
+    if (!isSystemAdmin(req.user))
+      fail("Platform admin access required.", 403);
+    const member = get("SELECT * FROM users WHERE id=?", req.params.id);
+    if (!member) fail("User not found.", 404);
+    tx(() => {
+      run("DELETE FROM sessions WHERE user_id=?", member.id);
+      run("DELETE FROM users WHERE id=?", member.id);
+      event(
+        req.user,
+        member.branch_id,
+        "Platform",
+        member.name,
+        "User deleted by platform admin",
+        member.id,
+      );
+    });
+    res.json({ ok: true, deleted: member.email });
   });
   app.get("/api/workspace", (req, res) => {
     const u = req.user,
@@ -1581,7 +1746,8 @@ export function createApp({
   });
   app.post("/api/staff", (req, res) => {
     const u = req.user;
-    role(u, ["owner"]);
+    if (!canManageStaff(u))
+      fail("Your role does not permit this action.", 403);
     const v = z
       .object({
         name: text,
@@ -1618,7 +1784,8 @@ export function createApp({
   });
   app.put("/api/staff/:id", (req, res) => {
     const u = req.user;
-    role(u, ["owner"]);
+    if (!canManageStaff(u))
+      fail("Your role does not permit this action.", 403);
     const v = z
       .object({
         name: text,
@@ -1659,7 +1826,8 @@ export function createApp({
   });
   app.delete("/api/staff/:id", (req, res) => {
     const u = req.user;
-    role(u, ["owner"]);
+    if (!canManageStaff(u))
+      fail("Your role does not permit this action.", 403);
     const member = owned("users", req.params.id, u);
     if (member.role === "owner")
       fail("Owner accounts cannot be deleted here.", 403);
@@ -1679,7 +1847,8 @@ export function createApp({
   });
   app.post("/api/staff/:id/toggle", (req, res) => {
     const u = req.user;
-    role(u, ["owner"]);
+    if (!canManageStaff(u))
+      fail("Your role does not permit this action.", 403);
     const member = owned("users", req.params.id, u);
     if (member.role === "owner")
       fail("Owner accounts cannot be disabled here.");

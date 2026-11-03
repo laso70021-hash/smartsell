@@ -741,3 +741,73 @@ test("owner can change team roles and branch assignments; changed credentials re
     403,
   );
 });
+test("system admins can edit tenant team members", async () => {
+  const owner = client();
+  await owner("/auth/register", register("super-admin-team@example.com"));
+  const workspace = await owner("/workspace");
+  const target = await owner("/staff", {
+    name: "Editable team member",
+    email: "editable-team@example.com",
+    password: "EditableTeamPassword123!",
+    role: "cashier",
+    branch_id: workspace.user.branch_id,
+  });
+  const admin = client();
+  const updatedAdmin = db
+    .prepare("UPDATE users SET is_admin=1, role='cashier' WHERE email=?")
+    .run("super-admin-team@example.com");
+  assert.equal(updatedAdmin.changes, 1);
+  await admin("/auth/login", {
+    email: "super-admin-team@example.com",
+    password: "CorrectHorse123!",
+  });
+  const result = await admin(
+    `/staff/${target.id}`,
+    {
+      name: "Updated by admin",
+      role: "manager",
+      branch_id: workspace.user.branch_id,
+      account_status: "active",
+    },
+    "PUT",
+  );
+  assert.equal(result.status, 200);
+  const refreshed = await admin("/workspace");
+  const updatedMember = refreshed.staff.find((row) => row.id === target.id);
+  assert.ok(updatedMember);
+  assert.equal(updatedMember.name, "Updated by admin");
+  assert.equal(updatedMember.role, "manager");
+});
+test("platform admin exposes a global dashboard and lifecycle actions", async () => {
+  const owner = client();
+  await owner("/auth/register", register("platform-admin-dashboard@example.com"));
+  const workspace = await owner("/workspace");
+  const admin = client();
+  const auth = db.prepare("UPDATE users SET is_admin=1, role='cashier' WHERE email=?").run("platform-admin-dashboard@example.com");
+  assert.equal(auth.changes, 1);
+  await admin("/auth/login", {
+    email: "platform-admin-dashboard@example.com",
+    password: "CorrectHorse123!",
+  });
+  const overview = await admin("/admin/overview");
+  assert.equal(overview.status, 200);
+  assert.ok(overview.businesses.length >= 1);
+  assert.ok(overview.users.some((user) => user.email === "platform-admin-dashboard@example.com"));
+  const member = await owner("/staff", {
+    name: "Admin-managed staff",
+    email: "admin-managed@example.com",
+    password: "AdminManagedPassword123!",
+    role: "cashier",
+    branch_id: workspace.user.branch_id,
+  });
+  const updated = await admin(`/admin/users/${member.id}`, {
+    account_status: "suspended",
+    is_admin: false,
+  }, "PUT");
+  assert.equal(updated.status, 200);
+  const toggled = await admin(`/admin/users/${member.id}/toggle`, {}, "POST");
+  assert.equal(toggled.status, 200);
+  const users = await admin("/admin/users");
+  assert.equal(users.status, 200);
+  assert.ok(users.users.some((user) => user.id === member.id));
+});

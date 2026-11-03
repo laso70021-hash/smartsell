@@ -522,6 +522,23 @@ export function ActionDialog({
   if (type === "receipt" || type === "invoice") {
     const isInvoice = type === "invoice";
     const s = data.sales.find((s) => s.id === r?.id);
+    const downloadDocument = () => {
+      const invoiceNode = document.querySelector(".document-print-area .document-receipt");
+      if (!invoiceNode) {
+        window.print();
+        return;
+      }
+      const html = `<!doctype html><html><head><meta charset="utf-8" /><title>${isInvoice ? "Invoice" : "Receipt"} ${s?.reference || "preview"}</title><style>body{font-family:Segoe UI,Arial,sans-serif;padding:24px;background:#f8fafc;color:#111827}article{max-width:760px;margin:0 auto;padding:24px;border:1px solid #dfe7f2;background:white;border-radius:12px}.document-receipt{display:block}.document-receipt-header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:20px}.document-business{line-height:1.4}.document-receipt-title{display:flex;justify-content:space-between;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;padding:10px 0;margin:16px 0;font-weight:700;text-transform:uppercase}.document-receipt-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:20px}.document-receipt-meta div{display:flex;flex-direction:column;gap:4px;color:#475569}.document-items{width:100%;border-collapse:collapse;margin-top:12px}.document-items th,.document-items td{padding:8px 0;border-bottom:1px solid #e2e8f0;text-align:left}.document-items th:last-child,.document-items td:last-child{text-align:right}.document-totals{margin-top:18px;display:grid;gap:8px}.document-totals div{display:flex;justify-content:space-between}.document-grand-total{font-size:1.1rem;font-weight:700}.document-receipt-footer{margin-top:20px;padding-top:14px;border-top:1px solid #e2e8f0;text-align:center;color:#475569;display:grid;gap:4px}.document-receipt-footer strong{font-size:1rem;color:#0f172a}.document-receipt-header img{max-height:56px;max-width:120px;object-fit:contain;border-radius:8px}.document-receipt-header strong{display:block;font-size:1.2rem}.document-receipt-header span,.document-business small{color:#475569}.document-custom-content{margin:18px 0;padding:12px 0}.document-receipt-meta strong,.document-totals strong,.document-items td,.document-items th{color:#0f172a}</style></head><body>${invoiceNode.outerHTML}</body></html>`;
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${(s?.reference || (isInvoice ? "invoice" : "receipt")).replace(/\s+/g, "-").toLowerCase()}.html`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    };
     return (
       <Modal
         title={isInvoice ? "Sales invoice" : "Sale receipt"}
@@ -553,7 +570,11 @@ export function ActionDialog({
               </p>
             )}
             <div className="form-footer">
-              <Button onClick={() => window.print()}>
+              <Button onClick={downloadDocument}>
+                <Printer size={16} />
+                Download {isInvoice ? "invoice" : "receipt"}
+              </Button>
+              <Button variant="secondary" onClick={() => window.print()}>
                 <Printer size={16} />
                 Print {isInvoice ? "invoice" : "receipt"}
               </Button>
@@ -1001,18 +1022,26 @@ export function ActionDialog({
     ];
     handler = async (f) => {
       const payload = Object.fromEntries(f);
-      await write("/staff", {
+      await api("/team-invitations", {
         ...payload,
+        email: String(payload.email || "").trim(),
+        name: String(payload.name || "").trim(),
+        branch_id: String(payload.branch_id || branch),
+        role: String(payload.role || "cashier"),
+        account_status: String(payload.account_status || "active"),
         expires_at: payload.expires_at || "",
-      });
+      }, "POST");
       await refresh();
     };
   } else if (type === "staff-edit") {
-    title = "Edit team member";
-    description = `Update ${r?.name}'s role, assigned branch and account lifecycle. Their existing sessions will be revoked after saving.`;
-    submit = "Save team member";
+    title = r?.invited ? "Edit team invite" : "Edit team member";
+    description = r?.invited
+      ? `Update ${r?.name}'s invite details and branch assignment. An updated invitation will be resent with the latest role and branch.`
+      : `Update ${r?.name}'s role, assigned branch and account lifecycle. Their existing sessions will be revoked after saving.`;
+    submit = r?.invited ? "Save invite" : "Save team member";
     fields = [
       { name: "name", label: "Full name", value: r?.name },
+      { name: "email", label: "Email", type: "email", value: r?.email, disabled: Boolean(r?.invited) },
       {
         name: "role",
         label: "Role",
@@ -1048,6 +1077,18 @@ export function ActionDialog({
     ];
     handler = async (f) => {
       const payload = Object.fromEntries(f);
+      if (r?.invited) {
+        await api("/team-invitations", {
+          ...payload,
+          email: String(r.email || payload.email || "").trim(),
+          name: String(payload.name || r.name || "").trim(),
+          branch_id: String(payload.branch_id || r.branch_id || branch),
+          role: String(payload.role || r.role || "cashier"),
+          account_status: String(payload.account_status || r.account_status || "active"),
+          expires_at: payload.expires_at || r.expires_at || "",
+        }, "POST");
+        return;
+      }
       await write(`/staff/${r?.id}`, {
         ...payload,
         expires_at: payload.expires_at || "",

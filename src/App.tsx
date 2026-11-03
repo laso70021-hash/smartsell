@@ -36,7 +36,6 @@ import {
   X,
   ChevronDown,
   ArrowUpRight,
-  ShieldCheck,
   Utensils,
 } from "lucide-react";
 import { api, type User, type Workspace, type Row } from "./lib/api";
@@ -59,6 +58,24 @@ import { DocumentTemplates } from "./components/documents";
 const SYSTEM_ADMIN_ID = "0706ee20-d730-4a3e-bfaf-db0547cb3da5";
 const isSystemAdminUser = (user: User) =>
   Boolean(user.is_admin) || user.id === SYSTEM_ADMIN_ID;
+
+async function adminRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers || {});
+  if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const response = await fetch(`/api${path}`, {
+    ...init,
+    credentials: "include",
+    headers,
+  });
+  const payload = await response.text();
+  const json = payload ? JSON.parse(payload) : {};
+  if (!response.ok) {
+    throw new Error(json.error || json.message || "Request failed.");
+  }
+  return json as T;
+}
 
 type Action = { type: string; record?: Row };
 type Context = {
@@ -112,6 +129,282 @@ const links = [
   { to: "/app/downloads", label: "Downloads", icon: Download },
   { to: "/app/settings", label: "Settings", icon: Settings, owner: true },
 ];
+function AdminConsole({
+  user,
+  onLogout,
+}: {
+  user: User;
+  onLogout: () => void;
+}) {
+  const [overview, setOverview] = useState<null | {
+    stats: Record<string, number>;
+    users: Array<
+      User & {
+        business_name?: string;
+        branch_name?: string;
+        active?: number;
+        is_admin?: boolean | number;
+      }
+    >;
+    businesses: Array<Row>;
+    recent: Array<Row>;
+  }>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await adminRequest<{
+        stats: Record<string, number>;
+        users: Array<
+          User & {
+            business_name?: string;
+            branch_name?: string;
+            active?: number;
+            is_admin?: boolean | number;
+          }
+        >;
+        businesses: Array<Row>;
+        recent: Array<Row>;
+      }>('/admin/overview');
+      setOverview(data);
+      setError("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const updateUser = async (targetId: string, patch: Record<string, unknown>) => {
+    try {
+      const result = await adminRequest<{ ok?: boolean }>(`/admin/users/${targetId}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+      setStatus(result.ok ? "User updated." : "User saved.");
+      await refresh();
+    } catch (e) {
+      setStatus((e as Error).message);
+    }
+  };
+
+  const toggleUser = async (targetId: string) => {
+    try {
+      await adminRequest<{ ok: boolean }>(`/admin/users/${targetId}/toggle`, {
+        method: "POST",
+      });
+      await refresh();
+      setStatus("Access status updated.");
+    } catch (e) {
+      setStatus((e as Error).message);
+    }
+  };
+
+  const data = overview ?? {
+    stats: { businesses: 0, users: 0, active: 0, suspended: 0 },
+    users: [],
+    businesses: [],
+    recent: [],
+  };
+
+  if (loading && !overview)
+    return (
+      <div className="app-loading">
+        <Logo />
+        <div className="loading-line" />
+        <p>Loading platform administration…</p>
+      </div>
+    );
+
+  return (
+    <div className="app-shell admin-shell">
+      <aside className="sidebar admin-sidebar">
+        <Link to="/admin" className="sidebar-brand">
+          <Logo />
+          <span className="brand-caption">PLATFORM ADMIN</span>
+        </Link>
+        <div className="business-switch">
+          <span className="business-icon"><Store size={19} /></span>
+          <div>
+            <strong>{user.name}</strong>
+            <small>Platform admin</small>
+          </div>
+        </div>
+        <nav aria-label="Admin navigation">
+          <NavLink to="/admin" end className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}>
+            <LayoutDashboard size={18} />
+            <span>Overview</span>
+          </NavLink>
+          <NavLink to="/admin/users" className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}>
+            <Users size={18} />
+            <span>Users</span>
+          </NavLink>
+          <NavLink to="/admin/businesses" className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}>
+            <Store size={18} />
+            <span>Businesses</span>
+          </NavLink>
+        </nav>
+        <div className="sidebar-bottom">
+          <button className="logout" onClick={onLogout}>
+            <LogOut size={16} /> Sign out
+          </button>
+        </div>
+      </aside>
+      <div className="workspace">
+        <header className="topbar">
+          <div className="row">
+            <span className="breadcrumb">Platform admin <span>/</span> <strong>Console</strong></span>
+          </div>
+          <div className="topbar-actions">
+            <Button variant="ghost" size="icon" aria-label="Refresh admin console" onClick={() => void refresh()}>
+              <ArrowUpRight size={18} />
+            </Button>
+          </div>
+        </header>
+        <main className="main-content">
+          {error && <div className="error" role="alert">{error}</div>}
+          {status && <div className="success" role="status">{status}</div>}
+          <Routes>
+            <Route
+              index
+              element={
+                <div className="admin-grid">
+                  <div className="metric-card">
+                    <span>Businesses</span>
+                    <strong>{data.stats.businesses}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>Total users</span>
+                    <strong>{data.stats.users}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>Active accounts</span>
+                    <strong>{data.stats.active}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>Suspended</span>
+                    <strong>{data.stats.suspended}</strong>
+                  </div>
+                  <section className="panel">
+                    <h3>Recent platform activity</h3>
+                    <ul className="list-plain">
+                      {data.recent.length ? data.recent.slice(0, 8).map((row) => (
+                        <li key={row.id}>
+                          <strong>{row.entity || row.category || "Activity"}</strong>
+                          <span>{row.description || row.name || "No description"}</span>
+                        </li>
+                      )) : <li>No recent activity yet.</li>}
+                    </ul>
+                  </section>
+                  <section className="panel">
+                    <h3>Businesses</h3>
+                    <ul className="list-plain compact">
+                      {data.businesses.length ? data.businesses.slice(0, 8).map((business) => (
+                        <li key={business.id}>
+                          <strong>{business.name}</strong>
+                          <span>{business.email || "No contact email"}</span>
+                        </li>
+                      )) : <li>No businesses found.</li>}
+                    </ul>
+                  </section>
+                </div>
+              }
+            />
+            <Route
+              path="users"
+              element={
+                <section className="panel table-panel">
+                  <div className="panel-header">
+                    <h3>System users</h3>
+                    <Button variant="secondary" onClick={() => void refresh()}>Refresh</Button>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Business</th>
+                          <th>Role</th>
+                          <th>Status</th>
+                          <th>Access</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.users.length ? data.users.map((member) => {
+                          const nextStatus = member.account_status || "active";
+                          const platformAdmin = Boolean(member.is_admin) || member.id === SYSTEM_ADMIN_ID;
+                          return (
+                            <tr key={member.id}>
+                              <td>{member.name}<div className="muted">{member.email}</div></td>
+                              <td>{member.business_name || "-"}</td>
+                              <td>{member.role}</td>
+                              <td>{nextStatus}</td>
+                              <td>{platformAdmin ? "Admin" : member.active === 0 ? "Disabled" : "Enabled"}</td>
+                              <td>
+                                <div className="row-actions">
+                                  <Button size="sm" variant="secondary" onClick={() => updateUser(member.id, { account_status: nextStatus === "active" ? "suspended" : "active", active: nextStatus !== "active" })}>Toggle</Button>
+                                  <Button size="sm" variant="secondary" onClick={() => updateUser(member.id, { is_admin: !platformAdmin })}>{platformAdmin ? "Remove admin" : "Grant admin"}</Button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        }) : <tr><td colSpan={6}>No users found.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              }
+            />
+            <Route
+              path="businesses"
+              element={
+                <section className="panel table-panel">
+                  <div className="panel-header">
+                    <h3>Businesses</h3>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Country</th>
+                          <th>Currency</th>
+                          <th>Members</th>
+                          <th>Owners</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.businesses.length ? data.businesses.map((business) => (
+                          <tr key={business.id}>
+                            <td>{business.name}</td>
+                            <td>{business.country || "-"}</td>
+                            <td>{business.currency || "TZS"}</td>
+                            <td>{business.member_count || 0}</td>
+                            <td>{business.owner_count || 0}</td>
+                          </tr>
+                        )) : <tr><td colSpan={5}>No businesses found.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              }
+            />
+            <Route path="*" element={<Navigate to="/admin" replace />} />
+          </Routes>
+        </main>
+      </div>
+    </div>
+  );
+}
+
 function WorkspaceApp({
   user,
   onLogout,
@@ -192,10 +485,6 @@ function WorkspaceApp({
   };
   const isSystemAdmin = isSystemAdminUser(user);
   const canManage = isSystemAdmin || user.role !== "cashier";
-  const supabaseConfigured = Boolean(
-    import.meta.env.VITE_SUPABASE_URL &&
-      import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-  );
   if (!data || loading)
     return (
       <div className="app-loading">
@@ -305,14 +594,6 @@ function WorkspaceApp({
               ))}
           </nav>
           <div className="sidebar-bottom">
-            <div className="local-status">
-              <span
-                className="live-dot"
-                style={{ background: supabaseConfigured ? "#22c55e" : "#f59e0b" }}
-              />
-              {supabaseConfigured ? "Supabase ready" : "Needs Supabase config"}
-              <ShieldCheck size={13} />
-            </div>
             <NavLink to="/app/profile" className="user-card">
               <span className="avatar">
                 {user.name.slice(0, 2).toUpperCase()}
@@ -495,7 +776,6 @@ function WorkspaceApp({
         )}
         {toast && (
           <div className="toast" role="status">
-            <ShieldCheck size={19} />
             {toast}
             <button
               onClick={() => setToast("")}
@@ -551,12 +831,21 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={user ? <Navigate to="/app" /> : <Landing />} />
+        <Route
+          path="/"
+          element={
+            user ? (
+              <Navigate to={isSystemAdminUser(user) ? "/admin" : "/app"} />
+            ) : (
+              <Landing />
+            )
+          }
+        />
         <Route
           path="/login"
           element={
             user ? (
-              <Navigate to="/app" />
+              <Navigate to={isSystemAdminUser(user) ? "/admin" : "/app"} />
             ) : (
               <Auth register={false} onUser={setUser} />
             )
@@ -565,7 +854,25 @@ export default function App() {
         <Route
           path="/register"
           element={
-            user ? <Navigate to="/app" /> : <Auth register onUser={setUser} />
+            user ? (
+              <Navigate to={isSystemAdminUser(user) ? "/admin" : "/app"} />
+            ) : (
+              <Auth register onUser={setUser} />
+            )
+          }
+        />
+        <Route
+          path="/admin/*"
+          element={
+            user ? (
+              isSystemAdminUser(user) ? (
+                <AdminConsole user={user} onLogout={logout} />
+              ) : (
+                <Navigate to="/app" />
+              )
+            ) : (
+              <Navigate to="/login" />
+            )
           }
         />
         <Route

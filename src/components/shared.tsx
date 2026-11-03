@@ -127,6 +127,7 @@ export type FieldSpec = {
   placeholder?: string;
   help?: string;
   maxLength?: number;
+  disabled?: boolean;
   otherOption?: boolean;
   otherValue?: string;
   otherFieldName?: string;
@@ -197,6 +198,7 @@ export function Fields({ fields }: { fields: FieldSpec[] }) {
                 value={fieldValue}
                 onChange={(e) => updateField(f.name, e.target.value)}
                 required={f.required !== false}
+                disabled={f.disabled}
               >
                 {f.value === undefined && (
                   <option value="" disabled>
@@ -216,6 +218,7 @@ export function Fields({ fields }: { fields: FieldSpec[] }) {
                 onChange={(e) => updateField(f.name, e.target.value)}
                 required={f.required !== false}
                 maxLength={500}
+                disabled={f.disabled}
               />
             ) : (
               <input
@@ -228,6 +231,7 @@ export function Fields({ fields }: { fields: FieldSpec[] }) {
                 step={f.step}
                 placeholder={f.placeholder}
                 maxLength={f.maxLength ?? 200}
+                disabled={f.disabled}
                 autoComplete={f.type === "password" ? "new-password" : undefined}
               />
             )}{" "}
