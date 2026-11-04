@@ -128,11 +128,18 @@ export type FieldSpec = {
   help?: string;
   maxLength?: number;
   disabled?: boolean;
+  hidden?: boolean;
   otherOption?: boolean;
   otherValue?: string;
   otherFieldName?: string;
 };
-export function Fields({ fields }: { fields: FieldSpec[] }) {
+export function Fields({
+  fields,
+  onValuesChange,
+}: {
+  fields: FieldSpec[];
+  onValuesChange?: (name: string, value: string) => void;
+}) {
   const initialValues = () =>
     Object.fromEntries(
       fields.flatMap((f) => [
@@ -174,12 +181,14 @@ export function Fields({ fields }: { fields: FieldSpec[] }) {
       .join("|"),
   ]);
 
-  const updateField = (name: string, value: string) =>
+  const updateField = (name: string, value: string) => {
     setValues((current) => ({ ...current, [name]: value }));
+    onValuesChange?.(name, value);
+  };
 
   return (
     <div className="form-grid">
-      {fields.map((f) => {
+      {fields.filter((field) => !field.hidden).map((f) => {
         const fieldValue = values[f.name] ?? String(f.value ?? "");
         const customKey = f.otherFieldName || `${f.name}_other`;
         const customValue = values[customKey] ?? String(f.otherValue ?? "");

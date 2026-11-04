@@ -293,9 +293,11 @@ export function Landing() {
 export function Auth({
   register,
   onUser,
+  forcePassword = false,
 }: {
   register: boolean;
   onUser: (u: User) => void;
+  forcePassword?: boolean;
 }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -304,15 +306,21 @@ export function Auth({
     searchParams.get("reset") === "1" || searchParams.get("type") === "recovery";
   const [mode, setMode] = useState<
     "login" | "register" | "reset" | "new-password"
-  >(() => (recoveryLink ? "new-password" : register ? "register" : "login"));
+  >(() =>
+    forcePassword || recoveryLink
+      ? "new-password"
+      : register
+        ? "register"
+        : "login",
+  );
 
   useEffect(() => {
-    if (recoveryLink) {
+    if (forcePassword || recoveryLink) {
       setMode("new-password");
       return;
     }
     setMode(register ? "register" : "login");
-  }, [register, recoveryLink]);
+  }, [register, recoveryLink, forcePassword]);
 
   const [info, setInfo] = useState("");
 
@@ -446,7 +454,15 @@ export function Auth({
           if (body.password !== body.confirm) {
             throw new Error("Passwords do not match.");
           }
-          await api("/auth/reset-password", body);
+          if (String(body.password || "").length < 10) {
+            throw new Error("Choose a password with at least 10 characters.");
+          }
+          await api(
+            forcePassword
+              ? "/auth/complete-password-change"
+              : "/auth/reset-password",
+            body,
+          );
           const me = await api("/auth/me");
           onUser(me.user);
           navigate("/app");
@@ -458,29 +474,33 @@ export function Auth({
               name: "password",
               label: "New password",
               type: "password",
-              help: "Use at least 8 characters.",
+              help: "Use at least 10 characters.",
             },
             { name: "confirm", label: "Confirm new password", type: "password" },
           ]}
         />
       </Form>
-      <p className="auth-switch">
-        <button
-          type="button"
-          className="text-link"
-          onClick={() => {
-            setInfo("");
-            setMode("login");
-          }}
-        >
-          Return to sign in <ArrowUpRight size={14} />
-        </button>
-      </p>
+      {!forcePassword && (
+        <p className="auth-switch">
+          <button
+            type="button"
+            className="text-link"
+            onClick={() => {
+              setInfo("");
+              setMode("login");
+            }}
+          >
+            Return to sign in <ArrowUpRight size={14} />
+          </button>
+        </p>
+      )}
     </>
   );
 
   const activeContent =
-    mode === "register"
+    forcePassword
+      ? renderRecovery()
+      : mode === "register"
       ? renderLogin()
       : mode === "reset"
         ? renderReset()
@@ -531,7 +551,9 @@ export function Auth({
               : mode === "reset"
                 ? "PASSWORD HELP"
                 : mode === "new-password"
-                  ? "SECURE YOUR ACCOUNT"
+                      ? forcePassword
+                        ? "FIRST SIGN-IN"
+                        : "SECURE YOUR ACCOUNT"
                   : "GOOD TO SEE YOU"}
           </span>
           <h2>
@@ -540,7 +562,9 @@ export function Auth({
               : mode === "reset"
                 ? "Reset your password."
                 : mode === "new-password"
-                  ? "Choose a new password."
+                  ? forcePassword
+                    ? "Set your new password."
+                    : "Choose a new password."
                   : "Welcome back."}
           </h2>
           <p>
@@ -549,7 +573,9 @@ export function Auth({
               : mode === "reset"
                 ? "Enter the email address for your Smartsell account."
                 : mode === "new-password"
-                  ? "Create a fresh password to continue signing in."
+                    ? forcePassword
+                      ? "For your security, choose a new password before opening your workspace."
+                      : "Create a fresh password to continue signing in."
                   : "Sign in to pick up where you left off."}
           </p>
           {activeContent}

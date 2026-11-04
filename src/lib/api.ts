@@ -49,7 +49,10 @@ export type User = {
   role: "owner" | "manager" | "cashier";
   theme: "dark" | "light";
   account_status?: "active" | "pending" | "suspended";
+  member_status?: "active" | "pending" | "suspended";
+  access_expired?: boolean;
   suspension_reason?: string;
+  must_change_password?: boolean;
   expires_at?: string | null;
   is_admin?: boolean;
 };
@@ -653,6 +656,46 @@ async function updatePasswordFromRecovery(body: Record<string, any>) {
   return { ok: true };
 }
 
+async function completePasswordSetup(body: Record<string, unknown>) {
+  const password = String(body.password || "");
+  if (password.length < 10) {
+    throw new Error("Choose a password with at least 10 characters.");
+  }
+  const { data, error } = await getSupabase().functions.invoke<{
+    ok: boolean;
+  }>("invite-team-member", {
+    body: { action: "complete-password-change", password },
+  });
+  if (error) {
+    if (error.context instanceof Response) {
+      const result = (await error.context.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      throw new Error(result?.error || error.message);
+    }
+    throw error;
+  }
+  return data;
+}
+
+async function invokeTeamFunction(body: Record<string, unknown>) {
+  const { data, error } = await getSupabase().functions.invoke<{
+    ok: boolean;
+    email?: string;
+    message?: string;
+  }>("invite-team-member", { body });
+  if (error) {
+    if (error.context instanceof Response) {
+      const result = (await error.context.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      throw new Error(result?.error || error.message);
+    }
+    throw error;
+  }
+  return data;
+}
+
 export async function api<T = any>(
   path: string,
   body?: unknown,
@@ -669,6 +712,10 @@ export async function api<T = any>(
     return (await requestPasswordReset((body || {}) as Record<string, any>)) as T;
   if (path === "/auth/reset-password" && method === "POST")
     return (await updatePasswordFromRecovery((body || {}) as Record<string, any>)) as T;
+  if (path === "/auth/complete-password-change" && method === "POST")
+    return (await completePasswordSetup(
+      (body || {}) as Record<string, unknown>,
+    )) as T;
   if (path === "/auth/logout" && method === "POST") {
     const { error } = await client.auth.signOut();
     if (error) throw supabaseError(error);
@@ -781,21 +828,32 @@ export async function api<T = any>(
   if (path === "/team-invitations" && method === "POST") {
     if (!body || typeof body !== "object" || Array.isArray(body))
       throw new Error("Provide the team member invitation details.");
-    const { data, error } = await client.functions.invoke<{
-      ok: boolean;
-      email: string;
-      message: string;
-    }>("invite-team-member", { body: body as Record<string, unknown> });
-    if (error) {
-      if (error.context instanceof Response) {
-        const result = (await error.context.json().catch(() => null)) as
-          | { error?: string }
-          | null;
-        throw new Error(result?.error || error.message);
-      }
-      throw error;
-    }
-    return data as T;
+    return (await invokeTeamFunction(body as Record<string, unknown>)) as T;
+  }
+  if (path.startsWith("/staff/")) {
+    const [pathname] = path.split("?", 1);
+    const match = pathname.match(
+      /^\/staff\/([0-9a-f-]{36})(?:\/(toggle))?$/i,
+    );
+    if (!match) throw new Error("Unsupported team member operation.");
+    const action =
+      method === "PUT"
+        ? "edit"
+        : method === "DELETE"
+          ? "delete"
+          : method === "POST" && match[2] === "toggle"
+            ? "toggle"
+            : "";
+    if (!action) throw new Error("Unsupported team member operation.");
+    return (await rpc<T>("smartsell_team_manage", {
+      command: {
+        action,
+        member_id: match[1],
+        ...(body && typeof body === "object"
+          ? (body as Record<string, unknown>)
+          : {}),
+      },
+    })) as T;
   }
   const [pathname, query] = path.split("?", 2);
   const defaultTemplate = pathname.match(

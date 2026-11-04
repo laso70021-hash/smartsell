@@ -2294,6 +2294,12 @@ export default function App() {
         <Button onClick={() => window.location.reload()}>Retry connection</Button>
       </div>
     );
+  if (user?.must_change_password)
+    return (
+      <BrowserRouter>
+        <Auth register={false} forcePassword onUser={setUser} />
+      </BrowserRouter>
+    );
   if (user?.account_status === "suspended" && !isSystemAdminUser(user))
     return (
       <main className="business-suspension-screen">
@@ -2319,6 +2325,29 @@ export default function App() {
             Contact the Smartsell platform team to discuss reactivating this
             account.
           </p>
+          <Button variant="secondary" onClick={() => void logout()}>
+            <LogOut size={16} />
+            Sign out
+          </Button>
+        </div>
+      </main>
+    );
+  const memberAccessMessage =
+    user?.member_status === "pending"
+      ? "Your team account is pending approval by the business owner."
+      : user?.member_status === "suspended"
+        ? "Your team access has been suspended by the business owner."
+        : user?.access_expired
+          ? "Your team access has expired. Contact the business owner."
+          : "";
+  if (user && !isSystemAdminUser(user) && memberAccessMessage)
+    return (
+      <main className="business-suspension-screen">
+        <div className="business-suspension-card">
+          <Logo />
+          <p className="eyebrow">TEAM ACCOUNT ACCESS</p>
+          <h1>Workspace access is unavailable</h1>
+          <p>{memberAccessMessage}</p>
           <Button variant="secondary" onClick={() => void logout()}>
             <LogOut size={16} />
             Sign out

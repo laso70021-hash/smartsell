@@ -457,6 +457,9 @@ export function ActionDialog({
   const [productImage, setProductImage] = useState<File | null>(null);
   const [removeProductImage, setRemoveProductImage] = useState(false);
   const [productImagePreview, setProductImagePreview] = useState("");
+  const [staffSetupMethod, setStaffSetupMethod] = useState<"invite" | "manual">(
+    "invite",
+  );
   const productOperation = useRef<ProductOperation | null>(null);
   const pendingProductImage = useRef<{
     productId: string;
@@ -983,11 +986,28 @@ export function ActionDialog({
   } else if (type === "staff") {
     title = "Add a team member";
     description =
-      "Create a user profile, assign a role and choose whether access must be suspended or expire on a date.";
-    submit = "Create team member";
+      "Send a confirmation invitation, or create the account with a temporary password that must be changed at first sign-in.";
+    submit = "Add team member";
     fields = [
       { name: "name", label: "Full name" },
       { name: "email", label: "Email", type: "email" },
+      {
+        name: "setup_method",
+        label: "Account setup",
+        value: "invite",
+        options: [
+          { value: "invite", label: "Send confirmation invitation" },
+          { value: "manual", label: "Set a temporary password" },
+        ],
+      },
+      {
+        name: "password",
+        label: "Temporary password",
+        type: "password",
+        required: false,
+        hidden: staffSetupMethod !== "manual",
+        help: "The team member must choose a new password at first sign-in.",
+      },
       {
         name: "role",
         label: "Role",
@@ -1022,6 +1042,14 @@ export function ActionDialog({
     ];
     handler = async (f) => {
       const payload = Object.fromEntries(f);
+      if (
+        payload.setup_method === "manual" &&
+        String(payload.password || "").length < 10
+      ) {
+        throw new Error(
+          "Enter a temporary password with at least 10 characters.",
+        );
+      }
       await api("/team-invitations", {
         ...payload,
         email: String(payload.email || "").trim(),
@@ -1030,6 +1058,7 @@ export function ActionDialog({
         role: String(payload.role || "cashier"),
         account_status: String(payload.account_status || "active"),
         expires_at: payload.expires_at || "",
+        setup_method: String(payload.setup_method || "invite"),
       }, "POST");
       await refresh();
     };
@@ -1037,7 +1066,7 @@ export function ActionDialog({
     title = r?.invited ? "Edit team invite" : "Edit team member";
     description = r?.invited
       ? `Update ${r?.name}'s invite details and branch assignment. An updated invitation will be resent with the latest role and branch.`
-      : `Update ${r?.name}'s role, assigned branch and account lifecycle. Their existing sessions will be revoked after saving.`;
+      : `Update ${r?.name}'s role, assigned branch and account lifecycle. Workspace access is checked immediately after saving.`;
     submit = r?.invited ? "Save invite" : "Save team member";
     fields = [
       { name: "name", label: "Full name", value: r?.name },
@@ -1166,7 +1195,9 @@ export function ActionDialog({
               : type === "refund"
                 ? "Sale refunded and stock returned. Record the cash refund with your customer."
                 : type === "staff"
-                  ? "Invitation email sent. Your teammate can accept it and set their own password."
+                  ? staffSetupMethod === "manual"
+                    ? "Confirmation invitation sent. The team member must change the temporary password at first sign-in."
+                    : "Confirmation invitation sent. Your teammate can accept it and set their own password."
                   : type === "staff-delete"
                     ? "Team member removed and the dashboard has been refreshed."
                     : "Saved successfully.",
@@ -1174,7 +1205,14 @@ export function ActionDialog({
           onClose();
         }}
       >
-        <Fields fields={fields} />
+        <Fields
+          fields={fields}
+          onValuesChange={(name, value) => {
+            if (type === "staff" && name === "setup_method") {
+              setStaffSetupMethod(value === "manual" ? "manual" : "invite");
+            }
+          }}
+        />
         {type === "product" && (
           <ProductPhotoField
             existingPath={r?.image_path}
