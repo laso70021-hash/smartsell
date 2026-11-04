@@ -49,6 +49,7 @@ export type User = {
   role: "owner" | "manager" | "cashier";
   theme: "dark" | "light";
   account_status?: "active" | "pending" | "suspended";
+  suspension_reason?: string;
   expires_at?: string | null;
   is_admin?: boolean;
 };
@@ -67,6 +68,285 @@ export type Workspace = {
   staff: Row[];
   exports: Row[];
 };
+export type PlatformAdminRange = "today" | "7d" | "30d" | "month";
+export type PlatformAdminOverview = {
+  stats: {
+    businesses: number;
+    users: number;
+    active: number;
+    suspended: number;
+    branches: number;
+    products: number;
+    low_stock: number;
+    sales_by_currency: Array<{
+      currency: string;
+      total: number;
+      transactions: number;
+    }>;
+    stock_value_by_currency: Array<{ currency: string; value: number }>;
+  };
+  businesses: Array<
+    Row & {
+      name: string;
+      category: string;
+      country: string;
+      currency: string;
+      member_count: number;
+      branch_count: number;
+      owner_name: string | null;
+    }
+  >;
+  users: Array<
+    User & {
+      business_name: string;
+      branch_name: string;
+      active: number;
+      is_platform_admin: boolean;
+      created_at: string;
+    }
+  >;
+  branches: Array<
+    Row & {
+      business_name: string;
+      category: string;
+      staff_count: number;
+      active: number;
+    }
+  >;
+  business_types: Array<{ type: string; count: number }>;
+  growth: Array<{ date: string; count: number }>;
+  recent: Row[];
+  recent_sales: Row[];
+  range: PlatformAdminRange;
+  subscription_revenue_available: boolean;
+};
+export type PlatformAdminOperations = {
+  range: PlatformAdminRange;
+  total?: number;
+  limited?: boolean;
+  inventory?: Array<
+    Row & {
+      business_name: string;
+      currency: string;
+      name: string;
+      sku: string;
+      category: string;
+      unit: string;
+      cost: number;
+      price: number;
+      threshold: number;
+      total_quantity: number;
+      low_stock_locations: number;
+      branch_stock: Array<{
+        branch_id: string;
+        branch_name: string;
+        quantity: number;
+        low_stock: boolean;
+      }>;
+    }
+  >;
+  sales?: Row[];
+  transactions?: Row[];
+  audit_logs?: Row[];
+  sales_by_currency?: Array<{
+    currency: string;
+    total: number;
+    transactions: number;
+  }>;
+  purchases_by_currency?: Array<{
+    currency: string;
+    total: number;
+    transactions: number;
+  }>;
+  expenses_by_currency?: Array<{
+    currency: string;
+    total: number;
+    transactions: number;
+  }>;
+  totals_by_type?: Array<{ type: string; count: number }>;
+  daily_activity?: Array<{
+    date: string;
+    sales: number;
+    purchases: number;
+    expenses: number;
+  }>;
+  business_types?: Array<{ type: string; count: number }>;
+};
+export type PlatformBilling = {
+  plans: Array<
+    Row & {
+      name: string;
+      description: string;
+      amount: number;
+      currency: string;
+      billing_interval: "month" | "year";
+      trial_days: number;
+      active: boolean;
+      current_subscribers: number;
+      created_at: string;
+    }
+  >;
+  subscriptions: Array<
+    Row & {
+      business_id: string;
+      business_name: string;
+      business_currency: string;
+      plan_id: string;
+      plan_name: string;
+      status: "trialing" | "active" | "past_due" | "canceled" | "expired";
+      billing_interval: "month" | "year";
+      amount: number;
+      currency: string;
+      current_period_start: string;
+      current_period_end: string;
+      trial_end: string | null;
+      created_at: string;
+    }
+  >;
+  payments: Array<
+    Row & {
+      subscription_id: string;
+      business_id: string;
+      business_name: string;
+      amount: number;
+      currency: string;
+      status: "pending" | "paid" | "failed" | "refunded";
+      method: string;
+      external_reference: string | null;
+      note: string;
+      recorded_by: string | null;
+      created_at: string;
+    }
+  >;
+  businesses: Array<{ id: string; name: string; currency: string }>;
+  summary: {
+    plans: number;
+    subscribers: number;
+    trialing: number;
+    past_due: number;
+    paid_by_currency: Array<{
+      currency: string;
+      total: number;
+      payments: number;
+    }>;
+  };
+  range: PlatformAdminRange;
+  payment_provider_configured: boolean;
+};
+export type PlatformReviewStatus =
+  | "pending"
+  | "under_review"
+  | "needs_documents"
+  | "approved"
+  | "rejected"
+  | "suspended"
+  | "unreviewed";
+export type PlatformApplication = {
+  business_id: string;
+  business_name: string;
+  category: string;
+  custom_category: string;
+  country: string;
+  address: string;
+  tax_id: string;
+  email: string;
+  phone: string;
+  created_at: string;
+  status: PlatformReviewStatus;
+  reason: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  owner_name: string | null;
+  owner_email: string | null;
+  active_branches: number;
+};
+export type PlatformSupportMessage = {
+  id: string;
+  actor_id: string;
+  actor_name: string;
+  body: string;
+  created_at: string;
+};
+export type PlatformSupportTicket = {
+  id: string;
+  business_id: string | null;
+  business_name: string;
+  subject: string;
+  category: string;
+  priority: "low" | "normal" | "high" | "urgent";
+  status:
+    | "open"
+    | "in_progress"
+    | "waiting_on_business"
+    | "resolved"
+    | "closed";
+  assigned_admin?: string | null;
+  created_by?: string;
+  resolution_note: string;
+  created_at: string;
+  updated_at: string;
+  messages: PlatformSupportMessage[];
+};
+export type PlatformRestaurantOverview = {
+  restaurants: Array<{
+    id: string;
+    name: string;
+    country: string;
+    currency: string;
+    branches: number;
+    dining_tables: number;
+    kitchen_stations: number;
+    open_orders: number;
+  }>;
+  orders: Array<{
+    id: string;
+    reference: string;
+    status: string;
+    notes: string;
+    created_at: string;
+    updated_at: string;
+    business_id: string;
+    business_name: string;
+    currency: string;
+    branch_name: string;
+    table_name: string | null;
+    item_count: number;
+  }>;
+  orders_by_status: Array<{ status: string; count: number }>;
+  sales_by_currency: Array<{
+    currency: string;
+    total: number;
+    count: number;
+  }>;
+  range: PlatformAdminRange;
+};
+export type PlatformSettings = {
+  site_name: string;
+  support_email: string;
+  support_phone: string;
+  website_url: string;
+  contact_address: string;
+  supported_countries: string[];
+  supported_currencies: string[];
+  business_types: string[];
+};
+export type PlatformBusinessAccount = {
+  id: string;
+  name: string;
+  category: string;
+  custom_category: string;
+  country: string;
+  currency: string;
+  created_at: string;
+  account_status: "active" | "suspended";
+  suspension_reason: string;
+  suspended_at: string | null;
+  suspended_by: string | null;
+  owner_name: string | null;
+  member_count: number;
+  active_member_count: number;
+  branch_count: number;
+};
 type AuthMetadata = {
   name?: string;
   business?: string;
@@ -81,6 +361,64 @@ async function rpc<T>(name: string, args: Record<string, unknown> = {}) {
   const { data, error } = await getSupabase().rpc(name, args);
   if (error) throw supabaseError(error);
   return data as T;
+}
+export function platformAdminRequest<T>(
+  action: string,
+  options: { range?: PlatformAdminRange; body?: Record<string, unknown> } = {},
+) {
+  return rpc<T>("smartsell_platform_admin", {
+    command: {
+      action,
+      ...(options.range ? { range: options.range } : {}),
+      ...(options.body || {}),
+    },
+  });
+}
+export function platformAdminOperations<T>(
+  action: string,
+  options: {
+    range?: PlatformAdminRange;
+    body?: Record<string, unknown>;
+  } = {},
+) {
+  return rpc<T>("smartsell_platform_admin_operations", {
+    command: {
+      action,
+      ...(options.range ? { range: options.range } : {}),
+      ...(options.body || {}),
+    },
+  });
+}
+export function platformBillingRequest<T>(
+  action: string,
+  options: {
+    range?: PlatformAdminRange;
+    body?: Record<string, unknown>;
+  } = {},
+) {
+  return rpc<T>("smartsell_platform_billing", {
+    command: {
+      action,
+      ...(options.range ? { range: options.range } : {}),
+      ...(options.body || {}),
+    },
+  });
+}
+export function platformConsoleRequest<T>(
+  action: string,
+  body: Record<string, unknown> = {},
+) {
+  return rpc<T>("smartsell_platform_console", {
+    command: { action, ...body },
+  });
+}
+export function platformBusinessRequest<T>(
+  action: string,
+  body: Record<string, unknown> = {},
+) {
+  return rpc<T>("smartsell_platform_business", {
+    command: { action, ...body },
+  });
 }
 export function validateProductImage(file: File) {
   if (!PRODUCT_IMAGE_TYPES.has(file.type))
@@ -126,11 +464,55 @@ export async function removeProductImageObject(path: string) {
 }
 async function identity() {
   const client = getSupabase();
+  const isAuthCallback = (() => {
+    if (typeof window === "undefined") return false;
+    const hash = new URLSearchParams(window.location.hash.slice(1));
+    const search = new URLSearchParams(window.location.search);
+    return (
+      hash.has("access_token") ||
+      hash.has("error") ||
+      hash.has("error_description") ||
+      search.has("code")
+    );
+  })();
+  const clearAuthCallback = () => {
+    if (!isAuthCallback || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.hash = "";
+    for (const key of ["code", "error", "error_code", "error_description"]) {
+      url.searchParams.delete(key);
+    }
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}`,
+    );
+  };
+  const { error: initializationError } = await client.auth.initialize();
+  if (initializationError) {
+    clearAuthCallback();
+    if (isAuthCallback) {
+      throw new Error(
+        "This confirmation link is invalid or has expired. Request a new confirmation email and open the latest link.",
+      );
+    }
+    throw supabaseError(initializationError);
+  }
   const { data: sessionData, error: sessionError } =
     await client.auth.getSession();
   if (sessionError) throw supabaseError(sessionError);
-  if (!sessionData.session) throw new Error("Sign in to continue.");
-  const { data, error } = await client.auth.getUser();
+  if (!sessionData.session) {
+    clearAuthCallback();
+    if (isAuthCallback) {
+      throw new Error(
+        "We couldn't restore your sign-in from that confirmation link. It may have expired or already been used. Request a new confirmation email and open the latest link.",
+      );
+    }
+    throw new Error("Sign in to continue.");
+  }
+  const { data, error } = await client.auth.getUser(
+    sessionData.session.access_token,
+  );
   if (error) throw supabaseError(error);
   if (!data.user) throw new Error("Sign in to continue.");
   let member = await rpc<User | null>("smartsell_identity");
@@ -158,6 +540,9 @@ async function identity() {
 }
 export function resolveAppOrigin() {
   const candidates = [
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "",
     typeof import.meta !== "undefined" && import.meta.env
       ? import.meta.env.VITE_APP_URL ||
         import.meta.env.VITE_PUBLIC_APP_URL ||
@@ -172,9 +557,6 @@ export function resolveAppOrigin() {
         process.env.VITE_APP_URL ||
         process.env.VITE_PUBLIC_APP_URL ||
         process.env.SUPABASE_AUTH_REDIRECT_URL
-      : "",
-    typeof window !== "undefined" && window.location?.origin
-      ? window.location.origin
       : "",
     "https://smartsell.swahivo.com",
   ].filter(Boolean);
@@ -222,7 +604,7 @@ async function signUp(body: Record<string, any>) {
   if (error) throw supabaseError(error);
   if (!data.session)
     throw new Error(
-      "Check your email to confirm your Supabase account, then sign in to finish business setup.",
+      "Check your email to confirm your account, then open the latest confirmation link to finish setting up your business.",
     );
   return identity();
 }

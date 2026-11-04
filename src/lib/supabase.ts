@@ -23,7 +23,10 @@ export function getSupabase() {
 }
 
 export function supabaseError(error: { message: string; code?: string }) {
-  const message = error.message.replace(/^P0001:\s*/i, "");
+  const rawMessage = error.message.replace(/^P0001:\s*/i, "");
+  const message = /^Auth session missing!?$/i.test(rawMessage)
+    ? "Your sign-in session has expired. Please sign in again."
+    : rawMessage;
   return Object.assign(
     new Error(message || `Supabase request failed (${error.code || "unknown"}).`),
     { code: error.code },
