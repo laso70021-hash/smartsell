@@ -1204,8 +1204,17 @@ export function ActionDialog({
     title = "Delete team member?";
     description = `${r?.name} · ${r?.email}`;
     submit = "Delete member";
-    handler = async () => {
-      await write(`/staff/${r?.id}`, {}, "DELETE");
+    fields = [
+      {
+        name: "confirmation",
+        label: "Type DELETE to confirm",
+        placeholder: "DELETE",
+      },
+    ];
+    handler = async (f) => {
+      if (f.get("confirmation") !== "DELETE")
+        throw new Error("Type DELETE to continue.");
+      await write(`/staff/${r?.id}`, { confirmation: "DELETE" }, "DELETE");
     };
   }
   return (
@@ -1224,7 +1233,7 @@ export function ActionDialog({
                     ? "Confirmation invitation sent. The team member must change the temporary password at first sign-in."
                     : "Confirmation invitation sent. Your teammate can accept it and set their own password."
                   : type === "staff-delete"
-                    ? "Team member removed and the dashboard has been refreshed."
+                    ? "Team member removed and sign-in permanently blocked."
                     : "Saved successfully.",
           );
           onClose();
@@ -1286,9 +1295,9 @@ export function ActionDialog({
           <div className="warning-strip">
             <TriangleAlert size={18} />
             <p>
-              This permanently removes the user record from the business dashboard
-              and closes their active sessions. The team list will refresh after
-              the deletion completes.
+              This permanently removes the business membership and blocks the
+              member from signing in. Historical sales and audit records retain
+              their user reference.
             </p>
           </div>
         )}

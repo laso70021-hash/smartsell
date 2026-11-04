@@ -993,6 +993,90 @@ strong {
   width: 100%;
   min-height: 44px;
 }
+.signup-plan-form {
+  max-width: 1120px;
+}
+.signup-plan-picker {
+  width: 100%;
+}
+.signup-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  gap: 12px;
+}
+.signup-plan-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 18px;
+}
+.signup-plan-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.signup-plan-card > div > p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.signup-plan-card .signup-plan-price {
+  margin: 0;
+  color: var(--text);
+  font-size: 21px;
+  font-weight: 750;
+}
+.signup-plan-price small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+.signup-plan-card .signup-plan-trial {
+  margin: 6px 0;
+  color: var(--mint);
+}
+.signup-plan-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.signup-plan-card li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.signup-plan-card li strong {
+  color: var(--text);
+}
+.signup-plan-card .signup-plan-unconfigured {
+  border-radius: 8px;
+  background: var(--canvas);
+  padding: 10px;
+}
+.signup-selected-plan {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.signup-selected-plan strong {
+  color: var(--text);
+}
 .auth-switch {
   font-size: 12px !important;
   text-align: center;
@@ -1853,6 +1937,59 @@ strong {
   padding: 20px;
 }
 
+.admin-payment-instructions,
+.admin-plan-entitlements {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 20px;
+}
+
+.admin-payment-instructions > label,
+.admin-plan-entitlements > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.admin-payment-instructions textarea,
+.admin-plan-entitlements textarea,
+.admin-plan-entitlements select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--canvas);
+  color: var(--text);
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.admin-payment-instructions textarea,
+.admin-plan-entitlements textarea {
+  resize: vertical;
+}
+
+.admin-entitlement-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+.platform-review-documents {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .admin-billing-section-title {
   display: flex;
   justify-content: space-between;
@@ -2004,6 +2141,14 @@ strong {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 12px;
+}
+
+.admin-shell .admin-operation-stats .metric-card {
+  min-height: 114px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 16px;
 }
 
 .stock-chip {
@@ -6850,6 +6995,101 @@ tbody tr:hover {
   padding: clamp(24px, 5vw, 42px);
   text-align: center;
   box-shadow: 0 20px 70px #00000022;
+}
+
+.subscription-status-card {
+  width: min(100%, 720px);
+  align-items: stretch;
+  gap: 12px;
+  text-align: left;
+}
+.subscription-status-card > .logo,
+.subscription-status-card .eyebrow {
+  align-self: center;
+  text-align: center;
+}
+.subscription-status-card h1 {
+  text-align: center;
+}
+.subscription-status-card > p:not(.eyebrow) {
+  margin-top: 0;
+  text-align: center;
+}
+.subscription-status-plan,
+.subscription-payment-instructions,
+.subscription-payment-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--canvas);
+  padding: 13px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.subscription-status-plan strong,
+.subscription-payment-instructions strong {
+  color: var(--text);
+}
+.subscription-plan-change,
+.subscription-payment-form {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+.subscription-plan-change label,
+.subscription-payment-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.subscription-plan-change select,
+.subscription-payment-form input,
+.subscription-payment-form select,
+.subscription-payment-form textarea {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 9px 10px;
+  font: inherit;
+}
+.subscription-payment-form textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+.subscription-payment-form h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 1rem;
+}
+.subscription-payment-instructions p {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0;
+}
+.subscription-payment-instructions p span {
+  text-transform: capitalize;
+}
+.subscription-payment-pending {
+  flex-direction: row;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+.subscription-status-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding-top: 8px;
 }
 
 .business-suspension-icon {

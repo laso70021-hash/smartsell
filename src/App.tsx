@@ -4,6 +4,7 @@ import {
   useEffect,
   useState,
   useCallback,
+  type FormEvent,
 } from "react";
 import {
   BrowserRouter,
@@ -45,7 +46,9 @@ import {
   api,
   platformAdminOperations,
   platformAdminRequest,
+  platformPaymentReviewRequest,
   platformBillingRequest,
+  type PlatformPaymentReview,
   type PlatformBilling,
   type PlatformAdminOperations,
   type PlatformAdminOverview,
@@ -58,7 +61,7 @@ import {
 import { getSupabase } from "./lib/supabase";
 import { Logo } from "./components/shared";
 import { Button } from "./components/ui/button";
-import { Auth, Landing } from "./components/public";
+import { Auth, Landing, SubscriptionStatus } from "./components/public";
 import {
   Dashboard,
   Inventory,
@@ -80,8 +83,25 @@ import {
 const SYSTEM_ADMIN_ID = "0706ee20-d730-4a3e-bfaf-db0547cb3da5";
 const isSystemAdminUser = (user: User) =>
   Boolean(user.is_admin) || user.id === SYSTEM_ADMIN_ID;
+const needsSubscriptionAction = (user: User) => {
+  if (!user.subscription_enforced) return false;
+  if (user.business_review_status !== "approved") return true;
+  const periodEnd = user.subscription_period_end
+    ? new Date(user.subscription_period_end).getTime()
+    : 0;
+  if (user.subscription_status === "trialing") {
+    return !user.trial_end || new Date(user.trial_end).getTime() <= Date.now();
+  }
+  return user.subscription_status !== "active" || periodEnd <= Date.now();
+};
 
 type Action = { type: string; record?: Row };
+type PlanEntitlementDraft = {
+  feature_key: string;
+  label: string;
+  limit_value: number | null;
+  enabled: boolean;
+};
 type Context = {
   data: Workspace;
   branch: string;
@@ -157,6 +177,18 @@ function AdminConsole({
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
   const [billingStatus, setBillingStatus] = useState("");
+  const [paymentReviews, setPaymentReviews] = useState<PlatformPaymentReview[]>([]);
+  const [paymentReviewLoading, setPaymentReviewLoading] = useState(false);
+  const [paymentInstructionsDraft, setPaymentInstructionsDraft] = useState("{}");
+  const [paymentInstructionsBusy, setPaymentInstructionsBusy] = useState(false);
+  const [paymentInstructionsStatus, setPaymentInstructionsStatus] = useState("");
+  const [paymentInstructionsError, setPaymentInstructionsError] = useState("");
+  const [entitlementPlanId, setEntitlementPlanId] = useState("");
+  const [entitlementsDraft, setEntitlementsDraft] = useState("[]");
+  const [entitlementsLoading, setEntitlementsLoading] = useState(false);
+  const [entitlementsBusy, setEntitlementsBusy] = useState(false);
+  const [entitlementsStatus, setEntitlementsStatus] = useState("");
+  const [entitlementsError, setEntitlementsError] = useState("");
   const [editingPlanId, setEditingPlanId] = useState("");
   const [planDraft, setPlanDraft] = useState({
     name: "",
@@ -210,6 +242,7 @@ function AdminConsole({
       });
       setBilling(result);
       setBillingError("");
+      setEntitlementPlanId((current) => current || result.plans[0]?.id || "");
       setSubscriptionDraft((current) => ({
         ...current,
         business_id: current.business_id || result.businesses[0]?.id || "",
@@ -239,9 +272,65 @@ function AdminConsole({
     }
   }, [range]);
 
+  const loadPaymentReviews = useCallback(async () => {
+    setPaymentReviewLoading(true);
+    try {
+      const [reviews, settings] = await Promise.all([
+        platformPaymentReviewRequest<{ payments: PlatformPaymentReview[] }>("list"),
+        platformPaymentReviewRequest<{
+          payment_instructions: Record<string, unknown>;
+        }>("payment_instructions_get"),
+      ]);
+      setPaymentReviews(reviews.payments);
+      setPaymentInstructionsDraft(
+        JSON.stringify(settings.payment_instructions || {}, null, 2),
+      );
+      setPaymentInstructionsError("");
+    } catch (e) {
+      setPaymentInstructionsError(
+        e instanceof Error ? e.message : "Unable to load payment review records.",
+      );
+    } finally {
+      setPaymentReviewLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (location.pathname === "/admin/subscriptions") void loadBilling();
-  }, [location.pathname, loadBilling]);
+    if (location.pathname === "/admin/subscriptions") {
+      void loadBilling();
+      void loadPaymentReviews();
+    }
+  }, [location.pathname, loadBilling, loadPaymentReviews]);
+
+  useEffect(() => {
+    if (location.pathname !== "/admin/subscriptions" || !entitlementPlanId) {
+      setEntitlementsLoading(false);
+      return;
+    }
+    let active = true;
+    setEntitlementsLoading(true);
+    setEntitlementsError("");
+    void platformPaymentReviewRequest<{ entitlements: PlanEntitlementDraft[] }>(
+      "entitlements_get",
+      { plan_id: entitlementPlanId },
+    )
+      .then((result) => {
+        if (active) setEntitlementsDraft(JSON.stringify(result.entitlements, null, 2));
+      })
+      .catch((e) => {
+        if (active) {
+          setEntitlementsError(
+            e instanceof Error ? e.message : "Unable to load plan entitlements.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setEntitlementsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [entitlementPlanId, location.pathname]);
 
   useEffect(() => {
     if (location.pathname !== "/admin") return;
@@ -273,6 +362,7 @@ function AdminConsole({
       await platformBillingRequest(action, { body });
       setBillingStatus(message);
       await loadBilling();
+      await loadPaymentReviews();
       return true;
     } catch (e) {
       setBillingError(
@@ -282,6 +372,105 @@ function AdminConsole({
     } finally {
       setBillingBusy(false);
     }
+  };
+
+  const reviewPayment = async (
+    action: "verify" | "reject" | "request_information",
+    paymentId: string,
+  ) => {
+    let reason = "";
+    let confirmation: string | undefined;
+    if (action === "verify") {
+      if (!window.confirm("Confirm that the external payment was actually received.")) {
+        return;
+      }
+      confirmation = "External payment received and reference checked.";
+    } else {
+      reason = window.prompt(
+        action === "reject" ? "Reason for rejecting this payment" : "What information is required?",
+      )?.trim() || "";
+      if (!reason) return;
+    }
+    setBillingBusy(true);
+    setBillingError("");
+    setBillingStatus("");
+    try {
+      await platformPaymentReviewRequest(action, {
+        payment_id: paymentId,
+        ...(reason ? { reason } : {}),
+        ...(confirmation ? { confirmation } : {}),
+      });
+      setBillingStatus(
+        action === "verify"
+          ? "Payment verified and subscription activation recorded."
+          : action === "reject"
+            ? "Payment rejected; the business owner can review the reason."
+            : "Additional information requested from the business owner.",
+      );
+      await Promise.all([loadPaymentReviews(), loadBilling()]);
+    } catch (e) {
+      setBillingError(e instanceof Error ? e.message : "Unable to review this payment.");
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
+  const savePaymentInstructions = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setPaymentInstructionsBusy(true);
+    setPaymentInstructionsError("");
+    setPaymentInstructionsStatus("");
+    try {
+      const instructions = JSON.parse(paymentInstructionsDraft);
+      if (!instructions || typeof instructions !== "object" || Array.isArray(instructions)) {
+        throw new Error("Payment instructions must be a JSON object.");
+      }
+      await platformPaymentReviewRequest("payment_instructions_save", {
+        payment_instructions: instructions,
+      });
+      setPaymentInstructionsStatus("Payment instructions saved.");
+    } catch (e) {
+      setPaymentInstructionsError(
+        e instanceof Error ? e.message : "Unable to save payment instructions.",
+      );
+    } finally {
+      setPaymentInstructionsBusy(false);
+    }
+  };
+
+  const savePlanEntitlements = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setEntitlementsBusy(true);
+    setEntitlementsError("");
+    setEntitlementsStatus("");
+    try {
+      const entitlements: unknown = JSON.parse(entitlementsDraft);
+      if (!Array.isArray(entitlements)) {
+        throw new Error("Plan entitlements must be a JSON array.");
+      }
+      await platformPaymentReviewRequest("entitlements_save", {
+        plan_id: entitlementPlanId,
+        entitlements,
+      });
+      setEntitlementsStatus("Plan entitlements saved.");
+    } catch (e) {
+      setEntitlementsError(
+        e instanceof Error ? e.message : "Unable to save plan entitlements.",
+      );
+    } finally {
+      setEntitlementsBusy(false);
+    }
+  };
+
+  const openPaymentEvidence = async (path: string) => {
+    const { data, error: signedUrlError } = await getSupabase()
+      .storage.from("business-payment-evidence")
+      .createSignedUrl(path, 60);
+    if (signedUrlError) {
+      setBillingError(signedUrlError.message);
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   };
 
   const operationActions: Record<string, string> = {
@@ -1134,6 +1323,171 @@ function AdminConsole({
                           </div>
                         ))}
                       </div>
+
+                      <section className="panel table-panel admin-payment-reviews">
+                        <div className="panel-header">
+                          <div>
+                            <h3>Pending payment reviews</h3>
+                            <p>Verify received payments before activating paid subscriptions.</p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            disabled={paymentReviewLoading}
+                            onClick={() => void loadPaymentReviews()}
+                          >
+                            Refresh
+                          </Button>
+                        </div>
+                        <div className="table-wrap">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Business / owner</th>
+                                <th>Plan</th>
+                                <th>Amount due</th>
+                                <th>Method / reference</th>
+                                <th>Receipt</th>
+                                <th>Submitted</th>
+                                <th>Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {paymentReviews.filter((payment) => payment.status === "pending").length
+                                ? paymentReviews.filter((payment) => payment.status === "pending").map((payment) => (
+                                    <tr key={payment.id}>
+                                      <td>
+                                        <strong>{payment.business_name}</strong>
+                                        <div className="muted">{payment.owner_name || payment.owner_email || "Owner"}</div>
+                                      </td>
+                                      <td>{payment.plan_name}</td>
+                                      <td>{moneyByCurrency([{ currency: payment.currency, total: payment.amount }], "total")}</td>
+                                      <td>
+                                        {payment.method.replaceAll("_", " ")}
+                                        <div className="muted">{payment.external_reference || "No reference"}</div>
+                                      </td>
+                                      <td>
+                                        {payment.evidence_path ? (
+                                          <Button
+                                            size="sm"
+                                            variant="secondary"
+                                            onClick={() => void openPaymentEvidence(payment.evidence_path!)}
+                                          >
+                                            View receipt
+                                          </Button>
+                                        ) : "Not provided"}
+                                      </td>
+                                      <td>{new Date(payment.submitted_at).toLocaleString()}</td>
+                                      <td>
+                                        <div className="row-actions">
+                                          <Button
+                                            size="sm"
+                                            disabled={billingBusy}
+                                            onClick={() => void reviewPayment("verify", payment.id)}
+                                          >
+                                            Verify
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="secondary"
+                                            disabled={billingBusy}
+                                            onClick={() => void reviewPayment("request_information", payment.id)}
+                                          >
+                                            Request info
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="destructive"
+                                            disabled={billingBusy}
+                                            onClick={() => void reviewPayment("reject", payment.id)}
+                                          >
+                                            Reject
+                                          </Button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))
+                                : <tr><td colSpan={7}>{paymentReviewLoading ? "Loading payment reviews…" : "No payments are awaiting review."}</td></tr>}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+
+                      <form className="panel admin-payment-instructions" onSubmit={(event) => void savePaymentInstructions(event)}>
+                        <div className="admin-billing-section-title">
+                          <div>
+                            <h2>Approved payment instructions</h2>
+                            <p>Shown to business owners when they submit a subscription payment.</p>
+                          </div>
+                        </div>
+                        <label>
+                          Instructions (JSON object of label/value pairs)
+                          <textarea
+                            required
+                            rows={5}
+                            value={paymentInstructionsDraft}
+                            onChange={(event) => setPaymentInstructionsDraft(event.target.value)}
+                          />
+                        </label>
+                        {paymentInstructionsError && <div className="error" role="alert">{paymentInstructionsError}</div>}
+                        {paymentInstructionsStatus && <div className="success-message" role="status">{paymentInstructionsStatus}</div>}
+                        <Button type="submit" disabled={paymentInstructionsBusy}>
+                          {paymentInstructionsBusy ? "Saving…" : "Save payment instructions"}
+                        </Button>
+                      </form>
+
+                      <form className="panel admin-plan-entitlements" onSubmit={(event) => void savePlanEntitlements(event)}>
+                        <div className="admin-billing-section-title">
+                          <div>
+                            <h2>Plan features and limits</h2>
+                            <p>
+                              Configure only confirmed entitlements. These values appear on signup; access limits are enforced only where a feature has a database guard.
+                            </p>
+                          </div>
+                        </div>
+                        <label>
+                          Subscription plan
+                          <select
+                            required
+                            value={entitlementPlanId}
+                            onChange={(event) => {
+                              setEntitlementsDraft("[]");
+                              setEntitlementsStatus("");
+                              setEntitlementPlanId(event.target.value);
+                            }}
+                          >
+                            <option value="">Select a plan</option>
+                            {billing.plans.map((plan) => (
+                              <option key={plan.id} value={plan.id}>
+                                {plan.name}{plan.active ? "" : " · Archived"}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          Entitlements (JSON array with feature_key, label, limit_value, enabled)
+                          <textarea
+                            required
+                            rows={8}
+                            spellCheck={false}
+                            value={entitlementsDraft}
+                            onChange={(event) => setEntitlementsDraft(event.target.value)}
+                            placeholder={'[{"feature_key":"feature_name","label":"Feature name","limit_value":null,"enabled":true}]'}
+                          />
+                        </label>
+                        {entitlementsLoading && (
+                          <p className="admin-entitlement-help" role="status">
+                            Loading this plan&apos;s entitlements…
+                          </p>
+                        )}
+                        <p className="admin-entitlement-help">
+                          Use <code>null</code> for unlimited. Do not add unverified feature keys or limits; values without a matching application guard are informational only.
+                        </p>
+                        {entitlementsError && <div className="error" role="alert">{entitlementsError}</div>}
+                        {entitlementsStatus && <div className="success-message" role="status">{entitlementsStatus}</div>}
+                        <Button type="submit" disabled={entitlementsBusy || entitlementsLoading || !entitlementPlanId}>
+                          {entitlementsBusy ? "Saving…" : "Save plan entitlements"}
+                        </Button>
+                      </form>
 
                       <section className="admin-billing-grid">
                         <form
@@ -2400,6 +2754,12 @@ export default function App() {
         </div>
       </main>
     );
+  if (user && !isSystemAdminUser(user) && needsSubscriptionAction(user))
+    return (
+      <BrowserRouter>
+        <SubscriptionStatus user={user} onUser={setUser} onLogout={logout} />
+      </BrowserRouter>
+    );
   return (
     <BrowserRouter>
       <Routes>
@@ -2407,7 +2767,15 @@ export default function App() {
           path="/"
           element={
             user ? (
-              <Navigate to={isSystemAdminUser(user) ? "/admin" : "/app"} />
+              <Navigate
+                to={
+                  isSystemAdminUser(user)
+                    ? "/admin"
+                    : needsSubscriptionAction(user)
+                      ? "/account-status"
+                      : "/app"
+                }
+              />
             ) : (
               <Landing />
             )
@@ -2417,7 +2785,15 @@ export default function App() {
           path="/login"
           element={
             user ? (
-              <Navigate to={isSystemAdminUser(user) ? "/admin" : "/app"} />
+              <Navigate
+                to={
+                  isSystemAdminUser(user)
+                    ? "/admin"
+                    : needsSubscriptionAction(user)
+                      ? "/account-status"
+                      : "/app"
+                }
+              />
             ) : (
               <Auth register={false} onUser={setUser} />
             )
@@ -2427,9 +2803,27 @@ export default function App() {
           path="/register"
           element={
             user ? (
-              <Navigate to={isSystemAdminUser(user) ? "/admin" : "/app"} />
+              <Navigate
+                to={
+                  isSystemAdminUser(user)
+                    ? "/admin"
+                    : needsSubscriptionAction(user)
+                      ? "/account-status"
+                      : "/app"
+                }
+              />
             ) : (
               <Auth register onUser={setUser} />
+            )
+          }
+        />
+        <Route
+          path="/account-status"
+          element={
+            user && !isSystemAdminUser(user) ? (
+              <SubscriptionStatus user={user} onUser={setUser} onLogout={logout} />
+            ) : (
+              <Navigate to={user ? "/admin" : "/login"} />
             )
           }
         />
@@ -2440,7 +2834,9 @@ export default function App() {
               isSystemAdminUser(user) ? (
                 <AdminConsole user={user} onLogout={logout} />
               ) : (
-                <Navigate to="/app" />
+                <Navigate
+                  to={needsSubscriptionAction(user) ? "/account-status" : "/app"}
+                />
               )
             ) : (
               <Navigate to="/login" />
@@ -2451,7 +2847,11 @@ export default function App() {
           path="/app/*"
           element={
             user ? (
-              <WorkspaceApp user={user} onUser={setUser} onLogout={logout} />
+              needsSubscriptionAction(user) ? (
+                <Navigate to="/account-status" />
+              ) : (
+                <WorkspaceApp user={user} onUser={setUser} onLogout={logout} />
+              )
             ) : (
               <Navigate to="/login" />
             )

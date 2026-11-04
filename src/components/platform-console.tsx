@@ -8,9 +8,11 @@ import {
   Settings2,
   Store,
   Ticket,
+  Trash2,
 } from "lucide-react";
 import {
   currencyScale,
+  platformPaymentReviewRequest,
   platformBusinessRequest,
   platformConsoleRequest,
   type PlatformAdminRange,
@@ -21,6 +23,7 @@ import {
   type PlatformSupportTicket,
   type User,
 } from "../lib/api";
+import { getSupabase } from "../lib/supabase";
 import { Button } from "./ui/button";
 
 type AdminSection = "approvals" | "restaurant-pos" | "support" | "settings";
@@ -205,12 +208,57 @@ export function BusinessAccountsPage() {
     }
   };
 
+  const deleteTenant = async (business: PlatformBusinessAccount) => {
+    const confirmation = window.prompt(
+      `This permanently deletes ${business.name}, all linked business data, and uploaded files. Type the exact business name to continue:`,
+    );
+    if (confirmation === null) return;
+    if (confirmation !== business.name) {
+      setError("The business name did not match; nothing was deleted.");
+      return;
+    }
+    if (!window.confirm(
+      `Permanently delete ${business.name}? This cannot be undone. Member logins will be blocked.`,
+    )) return;
+
+    setSavingId(business.id);
+    setError("");
+    setNotice("");
+    try {
+      const { error: deleteError } = await getSupabase().functions.invoke(
+        "delete-business-tenant",
+        {
+          body: {
+            action: "delete_tenant",
+            business_id: business.id,
+            confirmation,
+          },
+        },
+      );
+      if (deleteError) {
+        let errorMessage = deleteError.message;
+        if (deleteError.context instanceof Response) {
+          const result = await deleteError.context.json().catch(() => null);
+          if (typeof result?.error === "string") errorMessage = result.error;
+        }
+        throw new Error(errorMessage);
+      }
+      setEditingId("");
+      setNotice(`${business.name} and its linked records were permanently deleted.`);
+      await load();
+    } catch (e) {
+      setError(messageOf(e, "Unable to delete this business."));
+    } finally {
+      setSavingId("");
+    }
+  };
+
   return (
     <div className="admin-operation-page platform-console">
       <ConsoleHeader
         icon={<Store size={20} />}
         title="Business accounts"
-        description="Suspending a business blocks every member from opening or using its workspace until the business is reactivated."
+        description="Suspend accounts or permanently delete a tenant and its linked business data. Deletion requires typing the exact business name."
         onRefresh={() => void load()}
         loading={loading}
       />
@@ -273,11 +321,12 @@ export function BusinessAccountsPage() {
                       )}
                     </td>
                     <td>
+                      <div className="row-actions">
                       {business.account_status === "active" ? (
                         <Button
                           size="sm"
                           variant="secondary"
-                          disabled={loading || savingId === business.id}
+                          disabled={loading || savingId !== ""}
                           onClick={() => {
                             setEditingId((current) =>
                               current === business.id ? "" : business.id,
@@ -291,12 +340,22 @@ export function BusinessAccountsPage() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          disabled={loading || savingId === business.id}
+                          disabled={loading || savingId !== ""}
                           onClick={() => void setStatus(business, "active")}
                         >
                           {savingId === business.id ? "Reactivating…" : "Reactivate"}
                         </Button>
                       )}
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={loading || savingId !== ""}
+                          onClick={() => void deleteTenant(business)}
+                        >
+                          <Trash2 size={14} />
+                          {savingId === business.id ? "Deleting…" : "Delete tenant"}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                   {editingId === business.id && (
@@ -380,10 +439,27 @@ function ReviewQueue() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await platformConsoleRequest<{
-        applications: PlatformApplication[];
-      }>("approvals_list", { status: statusFilter, search: searchValue });
-      setApplications(result.applications);
+      const [result, applicationDetails] = await Promise.all([
+        platformConsoleRequest<{ applications: PlatformApplication[] }>(
+          "approvals_list",
+          { status: statusFilter, search: searchValue },
+        ),
+        platformPaymentReviewRequest<{ applications: PlatformApplication[] }>(
+          "applications",
+        ),
+      ]);
+      const detailsByBusiness = new Map(
+        applicationDetails.applications.map((application) => [
+          application.business_id,
+          application,
+        ]),
+      );
+      setApplications(
+        result.applications.map((application) => ({
+          ...application,
+          ...(detailsByBusiness.get(application.business_id) || {}),
+        })),
+      );
       setError("");
     } catch (e) {
       setError(messageOf(e, "Unable to load business reviews."));
@@ -406,7 +482,7 @@ function ReviewQueue() {
         status: reviewStatus,
         reason,
       });
-      setNotice("Review status saved. This is an administrative review record; it does not block workspace access.");
+      setNotice("Review status saved. Business approval is required before subscription access is enabled.");
       setEditingId("");
       await load();
     } catch (e) {
@@ -416,12 +492,31 @@ function ReviewQueue() {
     }
   };
 
+  const openApplicationDocument = async (path: string) => {
+    const documentWindow = window.open("about:blank", "_blank");
+    if (!documentWindow) {
+      setError("Allow pop-ups to view this business document.");
+      return;
+    }
+    documentWindow.opener = null;
+    try {
+      const { data, error: signedUrlError } = await getSupabase()
+        .storage.from("business-registration-evidence")
+        .createSignedUrl(path, 60);
+      if (signedUrlError) throw signedUrlError;
+      documentWindow.location.href = data.signedUrl;
+    } catch (e) {
+      documentWindow.close();
+      setError(messageOf(e, "Unable to open this business document."));
+    }
+  };
+
   return (
     <div className="platform-console admin-operation-page">
       <ConsoleHeader
         icon={<ClipboardCheck size={20} />}
         title="Business approvals"
-        description="Review business records and track follow-up. Reviews are administrative notes and do not gate access."
+        description="Review submitted business details and documents. Approval is required before a new subscription can activate."
         onRefresh={() => void load()}
         loading={loading}
       />
@@ -473,6 +568,15 @@ function ReviewQueue() {
                       · {application.country || "Country not recorded"}
                     </p>
                     <p className="platform-review-meta">
+                      Plan: {application.plan_name || "Not recorded"} · Region:{" "}
+                      {application.region || "Not recorded"}
+                    </p>
+                    {application.registration_number && (
+                      <p className="platform-review-meta">
+                        Registration / licence: {application.registration_number}
+                      </p>
+                    )}
+                    <p className="platform-review-meta">
                       Owner: {application.owner_name || "Not recorded"}
                       {application.owner_email
                         ? ` · ${application.owner_email}`
@@ -498,6 +602,25 @@ function ReviewQueue() {
                 {application.reason && (
                   <p className="platform-review-reason">
                     <strong>Review note:</strong> {application.reason}
+                  </p>
+                )}
+                {application.documents?.length ? (
+                  <div className="platform-review-documents">
+                    <strong>Submitted documents</strong>
+                    {application.documents.map((path) => (
+                      <Button
+                        key={path}
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void openApplicationDocument(path)}
+                      >
+                        View {path.split("/").at(-1)}
+                      </Button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="platform-review-meta">
+                    No business documents submitted yet.
                   </p>
                 )}
                 <div className="platform-console-actions">

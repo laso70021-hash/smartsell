@@ -55,6 +55,72 @@ export type User = {
   must_change_password?: boolean;
   expires_at?: string | null;
   is_admin?: boolean;
+  business_review_status?:
+    | "pending"
+    | "under_review"
+    | "needs_documents"
+    | "approved"
+    | "rejected"
+    | "suspended"
+    | "unreviewed";
+  selected_plan_id?: string | null;
+  subscription_enforced?: boolean;
+  subscription_status?: string | null;
+  subscription_id?: string | null;
+  subscription_plan?: string | null;
+  subscription_amount?: number | null;
+  subscription_currency?: string | null;
+  subscription_period_end?: string | null;
+  trial_end?: string | null;
+};
+export type SignupPlan = {
+  id: string;
+  name: string;
+  description: string;
+  amount: number;
+  currency: string;
+  billing_interval: "month" | "year";
+  trial_days: number;
+  entitlements: Array<{
+    feature_key: string;
+    label: string;
+    limit_value: number | null;
+    enabled: boolean;
+  }>;
+};
+export type SubscriptionPortal = {
+  business_review_status: User["business_review_status"];
+  selected_plan_id: string | null;
+  documents?: string[];
+  subscription: (Row & {
+    plan_name: string;
+    status: string;
+    amount: number;
+    currency: string;
+    billing_interval: "month" | "year";
+    current_period_end: string;
+    trial_end: string | null;
+  }) | null;
+  payment_instructions: Record<string, unknown>;
+  free_trial_used?: boolean;
+  payments: Array<
+    Row & {
+      amount: number;
+      currency: string;
+      status: string;
+      method: string;
+      external_reference: string | null;
+      note: string;
+      submitted_at: string;
+      verified_at: string | null;
+      rejection_reason: string;
+    }
+  >;
+  review_events?: Array<{
+    decision: string;
+    reason: string;
+    created_at: string;
+  }>;
 };
 export type Workspace = {
   user: User;
@@ -196,7 +262,18 @@ export type PlatformBilling = {
       business_currency: string;
       plan_id: string;
       plan_name: string;
-      status: "trialing" | "active" | "past_due" | "canceled" | "expired";
+      status:
+        | "pending_approval"
+        | "awaiting_payment"
+        | "payment_submitted"
+        | "payment_review"
+        | "payment_rejected"
+        | "trialing"
+        | "active"
+        | "past_due"
+        | "canceled"
+        | "expired"
+        | "suspended";
       billing_interval: "month" | "year";
       amount: number;
       currency: string;
@@ -236,6 +313,25 @@ export type PlatformBilling = {
   range: PlatformAdminRange;
   payment_provider_configured: boolean;
 };
+export type PlatformPaymentReview = Row & {
+  subscription_id: string;
+  business_id: string;
+  business_name: string;
+  owner_name: string | null;
+  owner_email: string | null;
+  plan_name: string;
+  amount: number;
+  currency: string;
+  method: string;
+  external_reference: string | null;
+  evidence_path: string | null;
+  status: "pending" | "paid" | "failed" | "refunded";
+  note: string;
+  submitted_at: string;
+  verified_at: string | null;
+  reviewed_by: string | null;
+  rejection_reason: string;
+};
 export type PlatformReviewStatus =
   | "pending"
   | "under_review"
@@ -262,6 +358,11 @@ export type PlatformApplication = {
   owner_name: string | null;
   owner_email: string | null;
   active_branches: number;
+  selected_plan_id?: string | null;
+  plan_name?: string | null;
+  region?: string;
+  registration_number?: string;
+  documents?: string[];
 };
 export type PlatformSupportMessage = {
   id: string;
@@ -359,6 +460,11 @@ type AuthMetadata = {
   branch?: string;
   category?: string;
   custom_category?: string;
+  phone?: string;
+  address?: string;
+  region?: string;
+  registration_number?: string;
+  selected_plan_id?: string;
 };
 async function rpc<T>(name: string, args: Record<string, unknown> = {}) {
   const client = getSupabase();
@@ -419,6 +525,25 @@ export function platformAdminRequest<T>(
       ...(options.range ? { range: options.range } : {}),
       ...(options.body || {}),
     },
+  });
+}
+export function signupPlans() {
+  return rpc<SignupPlan[]>("smartsell_signup_plans");
+}
+export function subscriptionPortalRequest<T>(
+  action: string,
+  body: Record<string, unknown> = {},
+) {
+  return rpc<T>("smartsell_subscription_portal", {
+    command: { action, ...body },
+  });
+}
+export function platformPaymentReviewRequest<T>(
+  action: string,
+  body: Record<string, unknown> = {},
+) {
+  return rpc<T>("smartsell_platform_payment_reviews", {
+    command: { action, ...body },
   });
 }
 export function platformAdminOperations<T>(
@@ -580,6 +705,11 @@ async function identity() {
         branch: metadata.branch,
         category: metadata.category || "Retail",
         custom_category: metadata.custom_category || "",
+        phone: metadata.phone || "",
+        address: metadata.address || "",
+        region: metadata.region || "",
+        registration_number: metadata.registration_number || "",
+        selected_plan_id: metadata.selected_plan_id || "",
       },
     });
   }
@@ -621,7 +751,6 @@ export function resolveAppOrigin() {
       if (normalized) return normalized;
     }
   }
-
   return "https://smartsell.swahivo.com";
 }
 
@@ -631,6 +760,12 @@ function authRedirectUrl(path: string) {
 }
 
 async function signUp(body: Record<string, any>) {
+  if (String(body.password || "").length < 10)
+    throw new Error("Choose a password with at least 10 characters.");
+  if (body.password !== body.confirm_password)
+    throw new Error("Passwords do not match.");
+  if (!String(body.selected_plan_id || ""))
+    throw new Error("Choose a subscription plan before creating your account.");
   const { data, error } = await getSupabase().auth.signUp({
     email: String(body.email || ""),
     password: String(body.password || ""),
@@ -644,15 +779,22 @@ async function signUp(body: Record<string, any>) {
         branch: body.branch,
         category: body.category || "Retail",
         custom_category: body.custom_category || "",
+        phone: body.phone,
+        address: body.address,
+        region: body.region,
+        registration_number: body.registration_number,
+        selected_plan_id: body.selected_plan_id,
       } satisfies AuthMetadata,
       emailRedirectTo: authRedirectUrl("/login"),
     },
   });
   if (error) throw supabaseError(error);
   if (!data.session)
-    throw new Error(
-      "Check your email to confirm your account, then open the latest confirmation link to finish setting up your business.",
-    );
+    return {
+      confirmation_required: true,
+      message:
+        "Check your email to confirm your account. Your selected plan and business details will be used to finish setup when you open the confirmation link.",
+    };
   return identity();
 }
 async function signIn(body: Record<string, any>) {
@@ -722,12 +864,15 @@ async function completePasswordSetup(body: Record<string, unknown>) {
   return data;
 }
 
-async function invokeTeamFunction(body: Record<string, unknown>) {
+async function invokeTeamFunction(
+  body: Record<string, unknown>,
+  functionName = "invite-team-member",
+) {
   const { data, error } = await getSupabase().functions.invoke<{
     ok: boolean;
     email?: string;
     message?: string;
-  }>("invite-team-member", { body });
+  }>(functionName, { body });
   if (error) {
     if (error.context instanceof Response) {
       const result = (await error.context.json().catch(() => null)) as
@@ -889,6 +1034,18 @@ export async function api<T = any>(
             ? "toggle"
             : "";
     if (!action) throw new Error("Unsupported team member operation.");
+    if (method === "DELETE") {
+      if (!body || typeof body !== "object" || Array.isArray(body))
+        throw new Error("Confirm the team member removal.");
+      return (await invokeTeamFunction(
+        {
+          action: "delete_team_member",
+          member_id: match[1],
+          ...(body as Record<string, unknown>),
+        },
+        "delete-business-tenant",
+      )) as T;
+    }
     return (await rpc<T>("smartsell_team_manage", {
       command: {
         action,

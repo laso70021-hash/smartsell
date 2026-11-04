@@ -1,2 +1,5 @@
 [functions.hostinger-auth-email]
 verify_jwt = false
+
+[functions.delete-business-tenant]
+verify_jwt = true
