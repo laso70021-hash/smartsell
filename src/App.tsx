@@ -55,6 +55,7 @@ import {
   type Row,
   currencyScale,
 } from "./lib/api";
+import { getSupabase } from "./lib/supabase";
 import { Logo } from "./components/shared";
 import { Button } from "./components/ui/button";
 import { Auth, Landing } from "./components/public";
@@ -1880,7 +1881,14 @@ function WorkspaceApp({
         }
       })
       .catch((e) => {
-        if (active) setError(e.message);
+        if (active) {
+          setError(e.message);
+          if (
+            e.message === "Sign in to continue." ||
+            e.message === "Your sign-in session has expired. Sign in again."
+          )
+            void onLogout();
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -1899,12 +1907,19 @@ function WorkspaceApp({
         const identity = await api<{ user: User }>("/auth/me");
         if (active) onUser(identity.user);
       } catch (e) {
-        if (active)
+        if (active) {
           setError(
             e instanceof Error
               ? e.message
               : "Unable to refresh your business account status.",
           );
+          if (
+            e instanceof Error &&
+            (e.message === "Sign in to continue." ||
+              e.message === "Your sign-in session has expired. Sign in again.")
+          )
+            void onLogout();
+        }
       }
     };
     const interval = window.setInterval(() => void checkAccountStatus(), 15000);
@@ -1914,7 +1929,7 @@ function WorkspaceApp({
       window.clearInterval(interval);
       window.removeEventListener("focus", checkAccountStatus);
     };
-  }, [onUser]);
+  }, [onLogout, onUser]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
@@ -2260,16 +2275,46 @@ export default function App() {
     [ready, setReady] = useState(false),
     [authError, setAuthError] = useState("");
   useEffect(() => {
-    api("/auth/me")
-      .then((r) => {
-        setUser(r.user);
-        document.documentElement.dataset.theme = r.user.theme;
-      })
-      .catch((e) => {
-        if ((e as Error).message !== "Sign in to continue.")
-          setAuthError((e as Error).message);
-      })
-      .finally(() => setReady(true));
+    let active = true;
+    let authRevision = 0;
+    const loadUser = () => {
+      const requestRevision = authRevision;
+      void api("/auth/me")
+        .then((r) => {
+          if (!active || requestRevision !== authRevision) return;
+          setUser(r.user);
+          setAuthError("");
+          document.documentElement.dataset.theme = r.user.theme;
+        })
+        .catch((e) => {
+          if (!active || requestRevision !== authRevision) return;
+          setUser(null);
+          if ((e as Error).message !== "Sign in to continue.")
+            setAuthError((e as Error).message);
+          else setAuthError("");
+        })
+        .finally(() => {
+          if (active && requestRevision === authRevision) setReady(true);
+        });
+    };
+    const {
+      data: { subscription },
+    } = getSupabase().auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        authRevision += 1;
+        setUser(null);
+        setAuthError("");
+        setReady(true);
+      } else if (event === "SIGNED_IN") {
+        authRevision += 1;
+        window.setTimeout(loadUser, 0);
+      }
+    });
+    loadUser();
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
   async function logout() {
     try {

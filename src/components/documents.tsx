@@ -37,7 +37,7 @@ export type ReceiptConfig = {
   editor_data?: OutputData;
 };
 
-const MAX_DOCUMENT_LOGO_SIZE_BYTES = 512 * 1024;
+const MAX_STORED_DOCUMENT_LOGO_SIZE_BYTES = 256 * 1024;
 
 type Preset = {
   id: string;
@@ -357,22 +357,74 @@ function exportDocumentBlocks(document?: OutputData) {
     .join("\n");
 }
 
+async function readLogoDataUrl(blob: Blob) {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("The selected logo could not be read."));
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("The selected logo could not be read."));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function optimizeDocumentLogo(file: File) {
+  if (file.size <= MAX_STORED_DOCUMENT_LOGO_SIZE_BYTES)
+    return readLogoDataUrl(file);
+  const image = await createImageBitmap(file);
+  try {
+    let width = image.width;
+    let height = image.height;
+    for (let attempt = 0; attempt < 18; attempt++) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Logo optimization is unavailable in this browser.");
+      context.drawImage(image, 0, 0, width, height);
+      const quality = [0.9, 0.8, 0.7][attempt % 3];
+      const optimized = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/webp", quality),
+      );
+      if (!optimized)
+        throw new Error("The selected logo could not be optimized.");
+      if (optimized.size <= MAX_STORED_DOCUMENT_LOGO_SIZE_BYTES)
+        return readLogoDataUrl(optimized);
+      width = Math.max(96, Math.round(width * 0.8));
+      height = Math.max(96, Math.round(height * 0.8));
+    }
+    throw new Error("This logo could not be reduced enough. Choose a simpler logo image.");
+  } finally {
+    image.close();
+  }
+}
+
 type Template = Row & {
   document_type: "sales_receipt" | "sales_invoice";
   name: string;
   config: ReceiptConfig;
   is_default: boolean;
   is_published: boolean;
+  updated_at?: string;
 };
 
+function latestTemplateLogo(
+  templates: Array<Pick<Template, "config" | "updated_at">>,
+) {
+  return [...templates]
+    .filter((template) => template.config.logo_data_url)
+    .sort(
+      (left, right) =>
+        Date.parse(right.updated_at || "") - Date.parse(left.updated_at || ""),
+    )[0]?.config.logo_data_url;
+}
+
 export function officialReceiptSettings(
-  templates: Array<Pick<Template, "config" | "is_default">>,
+  templates: Array<Pick<Template, "config" | "is_default" | "updated_at">>,
 ): ReceiptConfig {
   const defaultTemplate = templates.find((template) => template.is_default);
-  const logo =
-    defaultTemplate?.config.logo_data_url ||
-    templates.find((template) => template.config.logo_data_url)?.config
-      .logo_data_url;
+  const logo = latestTemplateLogo(templates);
   return {
     ...(defaultTemplate?.config || DEFAULT_RECEIPT_CONFIG),
     ...(logo ? { logo_data_url: logo } : {}),
@@ -551,6 +603,8 @@ export function DocumentTemplates() {
   const saleItems = sale ? data.items.filter((item) => item.sale_id === sale.id) : [];
   const currentPresets =
     documentType === "sales_invoice" ? invoicePresets : presets;
+  const otherDocumentType =
+    documentType === "sales_invoice" ? "sales_receipt" : "sales_invoice";
   const selectedPreset = currentPresets.find((item) => item.id === selectedId);
   const availableVariables = documentType === "sales_invoice"
     ? [...sharedDocumentVariables, ...invoiceDocumentVariables]
@@ -575,18 +629,36 @@ export function DocumentTemplates() {
           if (active) setError((reason as Error).message);
           return { templates: [] as Template[] };
         }),
+      api<{ templates: Template[] }>(
+        `/document-templates?document_type=${otherDocumentType}`,
+      ).catch((reason) => {
+        if (active)
+          setError(
+            `The shared invoice/receipt logo could not be loaded: ${(reason as Error).message}`,
+          );
+        return { templates: [] as Template[] };
+      }),
       readDeviceDraft(draftKey).catch(() => undefined),
     ])
-      .then(([result, deviceDraft]) => {
+      .then(([result, otherResult, deviceDraft]) => {
         if (!active) return;
         const saved = result.templates || [];
+        const sharedLogo = latestTemplateLogo([
+          ...saved,
+          ...(otherResult.templates || []),
+        ]);
         setTemplates(saved);
         const defaultTemplate = saved.find((template) => template.is_default);
         if (deviceDraft) {
           setSelectedId(deviceDraft.selectedId);
           setSelectedSavedId(deviceDraft.selectedSavedId);
           setName(deviceDraft.name);
-          setSettings(deviceDraft.config);
+          setSettings({
+            ...deviceDraft.config,
+            ...(deviceDraft.config.logo_data_url || !sharedLogo
+              ? {}
+              : { logo_data_url: sharedLogo }),
+          });
           setEditorData(deviceDraft.config.editor_data || EMPTY_DOCUMENT_DATA);
           setEditorReset((revision) => revision + 1);
           setDraftStatus("Restored this device's latest draft");
@@ -594,7 +666,12 @@ export function DocumentTemplates() {
           setSelectedId("");
           setSelectedSavedId(defaultTemplate.id);
           setName(defaultTemplate.name);
-          setSettings(defaultTemplate.config);
+          setSettings({
+            ...defaultTemplate.config,
+            ...(defaultTemplate.config.logo_data_url || !sharedLogo
+              ? {}
+              : { logo_data_url: sharedLogo }),
+          });
           setEditorData(defaultTemplate.config.editor_data || EMPTY_DOCUMENT_DATA);
           setEditorReset((revision) => revision + 1);
         } else {
@@ -602,7 +679,10 @@ export function DocumentTemplates() {
           setSelectedId(firstPreset.id);
           setSelectedSavedId("");
           setName(firstPreset.name);
-          setSettings(firstPreset.config);
+          setSettings({
+            ...firstPreset.config,
+            ...(sharedLogo ? { logo_data_url: sharedLogo } : {}),
+          });
           setEditorData(firstPreset.config.editor_data || EMPTY_DOCUMENT_DATA);
           setEditorReset((revision) => revision + 1);
         }
@@ -779,17 +859,12 @@ export function DocumentTemplates() {
       setLogoError("Choose a PNG, JPEG, or WebP logo.");
       return;
     }
-    if (file.size > MAX_DOCUMENT_LOGO_SIZE_BYTES) {
-      setLogoError("Choose a logo smaller than 512 KiB.");
-      return;
+    try {
+      const logo_data_url = await optimizeDocumentLogo(file);
+      changeSettings({ ...settings, logo_data_url });
+    } catch (reason) {
+      setLogoError((reason as Error).message);
     }
-    const reader = new FileReader();
-    reader.onerror = () => setLogoError("The selected logo could not be read.");
-    reader.onload = () => {
-      if (typeof reader.result === "string")
-        changeSettings({ ...settings, logo_data_url: reader.result });
-    };
-    reader.readAsDataURL(file);
   }
 
   return (
@@ -914,7 +989,7 @@ export function DocumentTemplates() {
             <label className="field"><span>Paper size</span><select value={settings.paper_size} onChange={(event) => changeSettings({ ...settings, paper_size: event.target.value as ReceiptConfig["paper_size"] })}><option value="58mm">58 mm thermal</option><option value="80mm">80 mm thermal</option><option value="A4">A4</option></select></label>
             <label className="field"><span>Header arrangement</span><select value={settings.header_layout} onChange={(event) => changeSettings({ ...settings, header_layout: event.target.value as ReceiptConfig["header_layout"] })}><option value="centered">Centered</option><option value="split">Logo left</option></select></label>
             <label className="field"><span>Footer message</span><textarea value={settings.footer_message} maxLength={300} onChange={(event) => changeSettings({ ...settings, footer_message: event.target.value })} /></label>
-            <label className="field"><span>Business logo (PNG, JPEG, or WebP; up to 512 KiB)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadLogo(event.target.files?.[0])} /><small>After saving this template to your business, its logo is used on official sales receipts even when another template controls the receipt layout.</small></label>
+            <label className="field"><span>Business logo (PNG, JPEG, or WebP)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadLogo(event.target.files?.[0])} /><small>Large images are optimized automatically. Save the template to use its logo on official invoices and receipts.</small></label>
             {settings.logo_data_url && <Button variant="ghost" onClick={() => changeSettings({ ...settings, logo_data_url: undefined })}><RotateCcw size={14} /> Restore supplied logo</Button>}
             {logoError && <p className="error" role="alert">{logoError}</p>}
             <div className="document-editor-actions">

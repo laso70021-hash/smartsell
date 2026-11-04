@@ -471,12 +471,37 @@ export function ActionDialog({
     let active = true;
     setReceiptSettings(DEFAULT_RECEIPT_CONFIG);
     setReceiptTemplateError("");
-    api<{ templates: Array<{ config: ReceiptConfig; is_default: boolean }> }>(
-      `/document-templates?document_type=${type === "invoice" ? "sales_invoice" : "sales_receipt"}`,
-    )
-      .then(({ templates }) => {
+    const documentType = type === "invoice" ? "sales_invoice" : "sales_receipt";
+    const otherDocumentType =
+      documentType === "sales_invoice" ? "sales_receipt" : "sales_invoice";
+    Promise.all([
+      api<{
+        templates: Array<{
+          config: ReceiptConfig;
+          is_default: boolean;
+          updated_at: string;
+        }>;
+      }>(
+        `/document-templates?document_type=${documentType}`,
+      ),
+      api<{
+        templates: Array<{
+          config: ReceiptConfig;
+          is_default: boolean;
+          updated_at: string;
+        }>;
+      }>(
+        `/document-templates?document_type=${otherDocumentType}`,
+      ),
+    ])
+      .then(([current, other]) => {
         if (active)
-          setReceiptSettings(officialReceiptSettings(templates || []));
+          setReceiptSettings(
+            officialReceiptSettings([
+              ...(current.templates || []),
+              ...(other.templates || []),
+            ]),
+          );
       })
       .catch((reason) => {
         if (active) setReceiptTemplateError((reason as Error).message);

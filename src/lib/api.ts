@@ -361,8 +361,26 @@ type AuthMetadata = {
   custom_category?: string;
 };
 async function rpc<T>(name: string, args: Record<string, unknown> = {}) {
-  const { data, error } = await getSupabase().rpc(name, args);
-  if (error) throw supabaseError(error);
+  const client = getSupabase();
+  const { data, error } = await client.rpc(name, args);
+  if (error) {
+    if (
+      error.code === "42501" &&
+      error.message.includes("permission denied for function")
+    ) {
+      const { data: sessionData, error: sessionError } =
+        await client.auth.getSession();
+      if (sessionError) throw supabaseError(sessionError);
+      if (!sessionData.session) {
+        const { error: signOutError } = await client.auth.signOut({
+          scope: "local",
+        });
+        if (signOutError) throw supabaseError(signOutError);
+        throw new Error("Your sign-in session has expired. Sign in again.");
+      }
+    }
+    throw supabaseError(error);
+  }
   return data as T;
 }
 export function platformAdminRequest<T>(
