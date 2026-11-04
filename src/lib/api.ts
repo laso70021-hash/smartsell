@@ -362,26 +362,52 @@ type AuthMetadata = {
 };
 async function rpc<T>(name: string, args: Record<string, unknown> = {}) {
   const client = getSupabase();
-  const { data, error } = await client.rpc(name, args);
-  if (error) {
-    if (
-      error.code === "42501" &&
-      error.message.includes("permission denied for function")
-    ) {
-      const { data: sessionData, error: sessionError } =
-        await client.auth.getSession();
-      if (sessionError) throw supabaseError(sessionError);
-      if (!sessionData.session) {
-        const { error: signOutError } = await client.auth.signOut({
-          scope: "local",
-        });
-        if (signOutError) throw supabaseError(signOutError);
-        throw new Error("Your sign-in session has expired. Sign in again.");
-      }
-    }
-    throw supabaseError(error);
+  const result = await client.rpc(name, args);
+  if (
+    !result.error ||
+    result.error.code !== "42501" ||
+    !result.error.message.includes("permission denied for function")
+  ) {
+    if (result.error) throw supabaseError(result.error);
+    return result.data as T;
   }
-  return data as T;
+
+  const { data: refreshed, error: refreshError } =
+    await client.auth.refreshSession();
+  if (refreshError) {
+    const { data: sessionData, error: sessionError } =
+      await client.auth.getSession();
+    if (sessionError) throw supabaseError(sessionError);
+    if (!sessionData.session) {
+      const { error: signOutError } = await client.auth.signOut({
+        scope: "local",
+      });
+      if (signOutError) throw supabaseError(signOutError);
+      throw new Error("Your sign-in session has expired. Sign in again.");
+    }
+    throw supabaseError(refreshError);
+  }
+  if (!refreshed.session) {
+    const { error: signOutError } = await client.auth.signOut({
+      scope: "local",
+    });
+    if (signOutError) throw supabaseError(signOutError);
+    throw new Error("Your sign-in session has expired. Sign in again.");
+  }
+
+  const retry = await client.rpc(name, args);
+  if (retry.error) {
+    const { data: userData, error: userError } = await client.auth.getUser();
+    if (userError || !userData.user) {
+      const { error: signOutError } = await client.auth.signOut({
+        scope: "local",
+      });
+      if (signOutError) throw supabaseError(signOutError);
+      throw new Error("Your sign-in session has expired. Sign in again.");
+    }
+    throw supabaseError(retry.error);
+  }
+  return retry.data as T;
 }
 export function platformAdminRequest<T>(
   action: string,
